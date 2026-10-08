@@ -31,7 +31,7 @@ struct VMActionsMenu: View {
       Button("Send Mac Clipboard to VM", systemImage: "arrow.right.doc.on.clipboard") {
         Task { await model.clipboard.sendHostClipboard(to: name) }
       }
-      Button("Get VM Clipboard", systemImage: "arrow.left.doc.on.clipboard") {
+      Button("Get VM Clipboard", systemImage: "arrow.down.doc") {
         Task { await model.clipboard.fetchGuestClipboard(from: name) }
       }
       Divider()

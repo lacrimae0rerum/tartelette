@@ -104,7 +104,7 @@ struct DockMenuBuilder {
         submenu.addItem(ActionMenuItem("Send Mac Clipboard", systemImage: "arrow.right.doc.on.clipboard") {
           Task { await model.clipboard.sendHostClipboard(to: vm.name) }
         })
-        submenu.addItem(ActionMenuItem("Get VM Clipboard", systemImage: "arrow.left.doc.on.clipboard") {
+        submenu.addItem(ActionMenuItem("Get VM Clipboard", systemImage: "arrow.down.doc") {
           Task { await model.clipboard.fetchGuestClipboard(from: vm.name) }
         })
         submenu.addItem(.separator())
