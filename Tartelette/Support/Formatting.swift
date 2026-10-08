@@ -18,20 +18,21 @@ nonisolated enum Formatting {
 
   /// Tart reports VM disks in decimal gigabytes.
   static func gigabytes(_ value: Double?) -> String {
-    guard let value else { return "—" }
-    if value < 1 { return value == 0 ? "0 GB" : "< 1 GB" }
+    guard let value, value.isFinite else { return "—" }
+    if value < 1 { return value <= 0 ? "0 GB" : "< 1 GB" }
     return value.formatted(.number.precision(.fractionLength(0...1))) + " GB"
   }
 
   /// Megabytes as configured in `tart set --memory` → "4 GB" / "1.5 GB".
   static func megabytes(_ value: UInt64) -> String {
-    memory(value * 1024 * 1024)
+    let (bytes, overflow) = value.multipliedReportingOverflow(by: 1024 * 1024)
+    return memory(overflow ? .max : bytes)
   }
 
   /// "3.4 MB/s"
   static func rate(_ bytesPerSecond: Double) -> String {
     guard bytesPerSecond.isFinite, bytesPerSecond > 0 else { return "0 KB/s" }
-    return ByteCountFormatter.string(fromByteCount: Int64(bytesPerSecond), countStyle: .file) + "/s"
+    return ByteCountFormatter.string(fromByteCount: clampedInt64(bytesPerSecond), countStyle: .file) + "/s"
   }
 
   /// CPU where 100 = one core: "37%", "245%".
@@ -55,13 +56,13 @@ nonisolated enum Formatting {
 
   /// "1:05:09", "4:12", "0:03".
   static func elapsed(_ interval: TimeInterval) -> String {
-    let total = max(0, Int(interval.rounded()))
+    let total = interval.isFinite ? Int(clampedInt64(max(0, interval.rounded()))) : 0
     let hours = total / 3600
     let minutes = (total % 3600) / 60
     let seconds = total % 60
     return hours > 0
-      ? String(format: "%d:%02d:%02d", hours, minutes, seconds)
-      : String(format: "%d:%02d", minutes, seconds)
+      ? String(format: "%ld:%02ld:%02ld", hours, minutes, seconds)
+      : String(format: "%ld:%02ld", minutes, seconds)
   }
 
   /// "3 days", "5 hours" (for uptimes).
@@ -78,6 +79,15 @@ nonisolated enum Formatting {
     guard let date else { return "Never" }
     if abs(date.timeIntervalSince(now)) < 5 { return "Just now" }
     return date.formatted(.relative(presentation: .named, unitsStyle: .wide))
+  }
+
+  /// Converts without trapping: values beyond Int64's range saturate (`Int64(_:)` traps on them).
+  static func clampedInt64(_ value: Double) -> Int64 {
+    guard value.isFinite else { return 0 }
+    // 2^63 is exactly representable; anything at or above it doesn't fit.
+    if value >= 9_223_372_036_854_775_808.0 { return .max }
+    if value <= -9_223_372_036_854_775_808.0 { return .min }
+    return Int64(value)
   }
 
   static func loadAverage(_ values: [Double]) -> String {

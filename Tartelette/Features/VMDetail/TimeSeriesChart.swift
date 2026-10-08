@@ -40,7 +40,10 @@ struct TimeSeriesChart: View {
   private func chart(now: Date) -> some View {
     let start = now.addingTimeInterval(-window)
     let visible = series.map { item in
-      ChartSeries(name: item.name, color: item.color, points: item.points.filter { $0.date >= start })
+      // Non-finite values can't be plotted and would poison the y-scale.
+      ChartSeries(
+        name: item.name, color: item.color,
+        points: item.points.filter { $0.date >= start && $0.value.isFinite })
     }
 
     return Chart {
@@ -79,7 +82,7 @@ struct TimeSeriesChart: View {
         }
       }
 
-      if let rule {
+      if let rule, rule.value.isFinite {
         RuleMark(y: .value("Limit", rule.value))
           .foregroundStyle(.secondary.opacity(0.7))
           .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
@@ -154,9 +157,15 @@ struct TimeSeriesChart: View {
         visible.flatMap(\.points).map(\.value).max() ?? 0
       }
     // Keep the reference line (and its label) inside the plot.
-    let ruleTop = rule.map { $0.value * 1.12 } ?? 0
-    if let yMax { return max(yMax, peak, ruleTop, 0.0001) }
-    return max(peak * 1.2, ruleTop, 1)
+    let ruleTop = rule.map { $0.value * 1.12 }.flatMap { $0.isFinite ? $0 : nil } ?? 0
+    let top =
+      if let yMax, yMax.isFinite {
+        max(yMax, peak, ruleTop, 0.0001)
+      } else {
+        max(peak * 1.2, ruleTop, 1)
+      }
+    // A domain of 0...NaN or 0...inf traps; fall back to a unit scale.
+    return top.isFinite ? top : 1
   }
 
   /// Axis labels: seconds for short windows, minutes otherwise; marks stay clear of the edges.

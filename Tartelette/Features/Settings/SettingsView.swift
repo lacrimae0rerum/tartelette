@@ -186,11 +186,34 @@ private struct MonitoringSettings: View {
 
 // MARK: - Registries & network
 
+/// Registry override fields being edited. They are applied once typing settles (or on Return /
+/// leaving the pane), so half-typed credentials never reach Tart and the environment isn't
+/// rebuilt on every keystroke.
+private struct RegistryOverrideDraft: Equatable {
+  var username = ""
+  var password = ""
+  var hostname = ""
+
+  init() {}
+
+  init(_ settings: AppSettings) {
+    username = settings.registryUsername
+    password = settings.registryPassword
+    hostname = settings.registryHostname
+  }
+
+  func differs(from settings: AppSettings) -> Bool {
+    self != RegistryOverrideDraft(settings)
+  }
+}
+
 private struct NetworkSettings: View {
   @Environment(AppModel.self) private var model
   @State private var softnet: URL?
   @State private var softnetPrivileged = false
   @State private var softnetError: String?
+  @State private var registryDraft = RegistryOverrideDraft()
+  @State private var registryDraftLoaded = false
 
   var body: some View {
     @Bindable var settings = model.settings
@@ -205,9 +228,12 @@ private struct NetworkSettings: View {
       }
 
       Section {
-        TextField("User name", text: $settings.registryUsername, prompt: Text("TART_REGISTRY_USERNAME"))
-        SecureField("Password", text: $settings.registryPassword, prompt: Text("TART_REGISTRY_PASSWORD"))
-        TextField("Only for host", text: $settings.registryHostname, prompt: Text("Any registry"))
+        TextField("User name", text: $registryDraft.username, prompt: Text("TART_REGISTRY_USERNAME"))
+          .onSubmit(applyRegistryDraft)
+        SecureField("Password", text: $registryDraft.password, prompt: Text("TART_REGISTRY_PASSWORD"))
+          .onSubmit(applyRegistryDraft)
+        TextField("Only for host", text: $registryDraft.hostname, prompt: Text("Any registry"))
+          .onSubmit(applyRegistryDraft)
       } header: {
         Text("Registry credentials override")
       } footer: {
@@ -242,10 +268,29 @@ private struct NetworkSettings: View {
     }
     .formStyle(.grouped)
     .onChange(of: settings.disableAutoPrune) { model.reloadEnvironment() }
-    .onChange(of: settings.registryUsername) { model.reloadEnvironment() }
-    .onChange(of: settings.registryPassword) { model.reloadEnvironment() }
-    .onChange(of: settings.registryHostname) { model.reloadEnvironment() }
+    .onAppear {
+      registryDraft = RegistryOverrideDraft(settings)
+      registryDraftLoaded = true
+    }
+    // Debounce: each edit cancels the pending apply; the last one wins after a short pause.
+    .task(id: registryDraft) {
+      try? await Task.sleep(for: .milliseconds(800))
+      guard !Task.isCancelled else { return }
+      applyRegistryDraft()
+    }
+    .onDisappear(perform: applyRegistryDraft)
     .task { inspectSoftnet() }
+  }
+
+  /// Stores the edited registry overrides and rebuilds Tart's environment, once, if they changed.
+  private func applyRegistryDraft() {
+    let settings = model.settings
+    guard registryDraftLoaded, registryDraft.differs(from: settings) else { return }
+    if settings.registryUsername != registryDraft.username { settings.registryUsername = registryDraft.username }
+    // Only touch the Keychain when the password actually changed.
+    if settings.registryPassword != registryDraft.password { settings.registryPassword = registryDraft.password }
+    if settings.registryHostname != registryDraft.hostname { settings.registryHostname = registryDraft.hostname }
+    model.reloadEnvironment()
   }
 
   private func inspectSoftnet() {
