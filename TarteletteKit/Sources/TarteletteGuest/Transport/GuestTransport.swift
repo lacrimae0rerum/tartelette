@@ -44,6 +44,29 @@ public enum GuestTransportError: Error, Sendable, Equatable, LocalizedError {
   }
 }
 
+/// File transfers the bridge refuses before moving anything.
+public enum GuestTransferError: Error, Sendable, Equatable, LocalizedError {
+  /// Several selected items share a name; copying them into one folder would overwrite some.
+  case duplicateNames([String])
+
+  public var errorDescription: String? {
+    switch self {
+    case .duplicateNames(let names):
+      "Several items are named \(names.map { "“\($0)”" }.joined(separator: ", ")). Copy them separately or rename them first."
+    }
+  }
+
+  /// Throws `duplicateNames` when two items would land on the same name.
+  static func checkUniqueNames(_ names: [String]) throws {
+    var seen: Set<String> = []
+    var duplicates: [String] = []
+    for name in names where !seen.insert(name).inserted && !duplicates.contains(name) {
+      duplicates.append(name)
+    }
+    if !duplicates.isEmpty { throw GuestTransferError.duplicateNames(duplicates) }
+  }
+}
+
 /// Delivers guest commands through `tart exec`, i.e. the Tart Guest Agent's gRPC channel.
 ///
 /// The agent runs as the logged-in GUI user on Cirrus Labs images, so pasteboard tools work.

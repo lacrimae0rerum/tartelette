@@ -5,22 +5,29 @@ enum HostArchiver {
   static let tar = URL(fileURLWithPath: "/usr/bin/tar")
 
   /// Creates a gzip-compressed tarball of `files`, each stored under its last path component.
+  ///
+  /// - Throws: `GuestTransferError.duplicateNames` when two items share a name (one would
+  ///   overwrite the other on extraction).
   static func archive(_ files: [URL], to archive: URL) async throws {
+    try GuestTransferError.checkUniqueNames(files.map(\.lastPathComponent))
     var arguments = ["-czf", archive.path]
     for file in files {
-      arguments += ["-C", file.deletingLastPathComponent().path, file.lastPathComponent]
+      // `./name` keeps a name that starts with "-" from being read as a tar option.
+      arguments += ["-C", file.deletingLastPathComponent().path, "./" + file.lastPathComponent]
     }
     // COPYFILE_DISABLE keeps macOS from adding AppleDouble `._*` entries for extended attributes.
     try await run(arguments, environment: ["COPYFILE_DISABLE": "1"])
   }
 
-  /// Extracts a tarball into a fresh directory and returns its top-level entries, sorted.
+  /// Extracts a tarball into a fresh directory and returns its top-level entries (hidden ones
+  /// included, so dotfiles aren't silently dropped), sorted.
   static func extract(_ archive: URL, into directory: URL) async throws -> [URL] {
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     try await run(["-xzf", archive.path, "-C", directory.path], environment: [:])
-    let entries = try FileManager.default.contentsOfDirectory(
-      at: directory, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])
-    return entries.sorted { $0.lastPathComponent < $1.lastPathComponent }
+    let entries = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil, options: [])
+    return entries
+      .filter { $0.lastPathComponent != "__MACOSX" }
+      .sorted { $0.lastPathComponent < $1.lastPathComponent }
   }
 
   private static func run(_ arguments: [String], environment: [String: String]) async throws {

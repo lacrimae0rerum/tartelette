@@ -22,22 +22,23 @@ public struct GuestProbe: Sendable {
   ]
 
   public static func probe(_ transport: any GuestTransport, timeout: Duration = .seconds(8)) async -> GuestAgentStatus {
+    let isSSH = transport is SSHTransport
     do {
       let output = try await transport.run(command, standardInput: nil, timeout: timeout)
-      return interpret(output)
+      return interpret(output, isSSH: isSSH)
     } catch ProcessRunError.timedOut {
-      return .unavailable(reason: Reason.timedOut)
+      return .unavailable(reason: isSSH ? Reason.sshUnreachable : Reason.timedOut)
     } catch ProcessRunError.cancelled {
       return .unknown
     } catch {
-      return .unavailable(reason: friendlyReason(for: error.localizedDescription, status: nil))
+      return .unavailable(reason: probeReason(for: error.localizedDescription, status: nil, isSSH: isSSH))
     }
   }
 
   /// Maps probe output to a status. Exposed for tests.
-  public static func interpret(_ output: CommandOutput) -> GuestAgentStatus {
+  public static func interpret(_ output: CommandOutput, isSSH: Bool = false) -> GuestAgentStatus {
     guard output.succeeded else {
-      return .unavailable(reason: friendlyReason(for: output.diagnostic, status: output.status))
+      return .unavailable(reason: probeReason(for: output.diagnostic, status: output.status, isSSH: isSSH))
     }
     let lines = output.stdoutString
       .split(whereSeparator: \.isNewline)
@@ -67,20 +68,45 @@ public struct GuestProbe: Sendable {
     static let sshUnreachable = "SSH isn't reachable. Enable Remote Login in the guest and check its IP address."
   }
 
-  static func friendlyReason(for message: String, status: Int32?) -> String {
+  /// Messages printed by `tart exec` itself (host side) when the guest can't be reached at all.
+  static func transportReason(for message: String) -> String? {
     let lowered = message.lowercased()
     if lowered.contains("guest agent") || lowered.contains("control socket") { return Reason.agentMissing }
     if lowered.contains("is not running") { return Reason.notRunning }
     if lowered.contains("only available on macos 14") { return Reason.hostTooOld }
+    return nil
+  }
+
+  /// Messages printed by `ssh` itself; only meaningful when the transport is SSH.
+  static func sshReason(for message: String) -> String? {
+    let lowered = message.lowercased()
     if lowered.contains("permission denied") { return Reason.sshAuth }
     if lowered.contains("connection refused") || lowered.contains("timed out") || lowered.contains("no route to host")
       || lowered.contains("could not resolve")
     {
       return Reason.sshUnreachable
     }
+    return nil
+  }
+
+  /// Why the probe failed.
+  static func probeReason(for message: String, status: Int32?, isSSH: Bool) -> String {
+    if let reason = transportReason(for: message) { return reason }
+    if isSSH, let reason = sshReason(for: message) { return reason }
     if status == 125 { return "The guest could not start the probe command." }
     let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
     if trimmed.isEmpty, let status { return "The guest command failed with exit code \(status)." }
     return trimmed
+  }
+
+  /// Why a guest command (other than the probe) failed: connectivity problems map to the friendly
+  /// reasons above; anything else reports the guest's own message with what was being done.
+  static func commandReason(for message: String, status: Int32, operation: String, isSSH: Bool) -> String {
+    if let reason = transportReason(for: message) { return reason }
+    if isSSH, status == 255, let reason = sshReason(for: message) { return reason }
+    let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+    if status == 125 { return "Couldn't \(operation): the guest could not start the command." }
+    if trimmed.isEmpty { return "Couldn't \(operation): the guest command failed with exit code \(status)." }
+    return "Couldn't \(operation): \(trimmed)"
   }
 }

@@ -28,6 +28,8 @@ public struct GuestEndpoint: Sendable, Hashable {
 public struct GuestClipboardState: Sendable, Equatable {
   /// The guest's change counter (macOS) or content token (Linux) after the write.
   public var changeCount: Int
+  /// Fingerprint of what the guest now holds. Linux guests keep a single flavour, so this can be
+  /// the fingerprint of a projection (e.g. plain text only) rather than of the pushed payload.
   public var fingerprint: String
 
   public init(changeCount: Int, fingerprint: String) {
@@ -42,6 +44,9 @@ public struct GuestClipboardState: Sendable, Equatable {
 /// Larger ones first try one fast stream and, if the checksum disagrees, fall back to
 /// `chunkSize` blocks with per-block checksums and retries. This works around tart #1347, where
 /// macOS 12–15 guests silently drop 64 KiB blocks from exec streams above ~256 KiB.
+///
+/// Clipboard files are staged in per-transfer folders on both sides; only the most recent
+/// `Options.stagingFoldersToKeep` are kept, so automatic sync can't fill either disk.
 public actor ClipboardBridge {
   public struct Options: Sendable {
     /// Largest block moved by a single guest command on the slow path.
@@ -55,6 +60,8 @@ public actor ClipboardBridge {
     public var guestStagingRoot: String?
     /// Uses a named guest pasteboard instead of the general one (macOS guests; used by tests).
     public var guestPasteboardName: String?
+    /// How many clipboard file-staging folders to keep on each side (host and guest).
+    public var stagingFoldersToKeep: Int
 
     public init(
       chunkSize: Int = 128 * 1024,
@@ -62,7 +69,8 @@ public actor ClipboardBridge {
       maxRetries: Int = 3,
       allowsFastPath: Bool = true,
       guestStagingRoot: String? = nil,
-      guestPasteboardName: String? = nil
+      guestPasteboardName: String? = nil,
+      stagingFoldersToKeep: Int = 5
     ) {
       self.chunkSize = chunkSize
       self.inlineLimit = inlineLimit
@@ -70,6 +78,7 @@ public actor ClipboardBridge {
       self.allowsFastPath = allowsFastPath
       self.guestStagingRoot = guestStagingRoot
       self.guestPasteboardName = guestPasteboardName
+      self.stagingFoldersToKeep = max(1, stagingFoldersToKeep)
     }
   }
 
@@ -96,11 +105,16 @@ public actor ClipboardBridge {
 
   /// Reads the guest clipboard. Files are copied into a unique folder under `fileStagingDirectory`.
   ///
-  /// - Parameter maxBytes: Throws `GuestTransportError.tooLarge` before transferring anything bigger.
-  public func pullFromGuest(_ endpoint: GuestEndpoint, maxBytes: Int? = nil) async throws -> ClipboardPayload? {
+  /// - Parameters:
+  ///   - maxBytes: Throws `GuestTransportError.tooLarge` before transferring anything bigger.
+  ///   - includeFiles: When false, a clipboard holding files reads as empty (nil) and nothing is
+  ///     copied.
+  public func pullFromGuest(_ endpoint: GuestEndpoint, maxBytes: Int? = nil, includeFiles: Bool = true) async throws
+    -> ClipboardPayload?
+  {
     switch endpoint.os {
-    case .macOS: try await pullFromMacOS(endpoint, maxBytes: maxBytes)
-    case .linux: try await pullFromLinux(endpoint, maxBytes: maxBytes)
+    case .macOS: try await pullFromMacOS(endpoint, maxBytes: maxBytes, includeFiles: includeFiles)
+    case .linux: try await pullFromLinux(endpoint, maxBytes: maxBytes, includeFiles: includeFiles)
     case .unknown: throw GuestTransportError.unsupported("The guest operating system is unknown.")
     }
   }
@@ -113,46 +127,64 @@ public actor ClipboardBridge {
     case .linux: command = GuestScripts.linuxChangeCount()
     case .unknown: throw GuestTransportError.unsupported("The guest operating system is unknown.")
     }
-    let output = try await checked(endpoint, command, timeout: .seconds(15))
+    let output = try await checked(endpoint, command, operation: "check the guest clipboard", timeout: .seconds(15))
     return try decode(ChangeCountReply.self, from: output.stdout).changeCount
   }
 
   // MARK: Files
 
   /// Copies host files or folders into `guestDirectory` (never overwriting) and returns their guest paths.
+  ///
+  /// - Throws: `GuestTransferError.duplicateNames` when two items share a name.
   public func sendFiles(_ files: [URL], to endpoint: GuestEndpoint, guestDirectory: String) async throws -> [String] {
     guard !files.isEmpty else { return [] }
+    try GuestTransferError.checkUniqueNames(files.map(\.lastPathComponent))
     let archive = try temporaryHostFile(extension: "tgz")
     defer { try? FileManager.default.removeItem(at: archive) }
     try await HostArchiver.archive(files, to: archive)
     let data = try Data(contentsOf: archive)
     let guestArchive = stagingPath(endpoint, "\(UUID().uuidString).tgz")
-    try await upload(data, to: guestArchive, endpoint: endpoint)
+    do {
+      try await upload(data, to: guestArchive, endpoint: endpoint)
+    } catch {
+      await removeGuest([guestArchive], endpoint)
+      throw error
+    }
     let output = try await checked(
       endpoint, GuestScripts.extractArchive(guestArchive, into: guestDirectory, os: endpoint.os),
-      timeout: timeout(for: data.count))
+      operation: "unpack the copied files", timeout: timeout(for: data.count))
     return output.stdoutString.split(whereSeparator: \.isNewline).map(String.init)
   }
 
   /// Copies guest files or folders into a new folder inside `directory` and returns the local URLs.
+  ///
+  /// - Throws: `GuestTransferError.duplicateNames` when two items share a name.
   public func receiveFiles(_ guestPaths: [String], from endpoint: GuestEndpoint, into directory: URL) async throws -> [URL] {
     guard !guestPaths.isEmpty else { return [] }
+    try GuestTransferError.checkUniqueNames(guestPaths.map { GuestScripts.splitGuestPath($0).name })
     let guestArchive = stagingPath(endpoint, "\(UUID().uuidString).tgz")
-    _ = try await checked(
-      endpoint, GuestScripts.createArchive(guestArchive, paths: guestPaths, os: endpoint.os), timeout: .seconds(600))
     let data: Data
     do {
+      _ = try await checked(
+        endpoint, GuestScripts.createArchive(guestArchive, paths: guestPaths, os: endpoint.os),
+        operation: "pack the guest files", timeout: .seconds(600))
       data = try await download(guestArchive, endpoint: endpoint)
     } catch {
-      _ = try? await endpoint.transport.run(GuestScripts.remove([guestArchive], os: endpoint.os), standardInput: nil, timeout: .seconds(15))
+      await removeGuest([guestArchive], endpoint)
       throw error
     }
-    _ = try? await endpoint.transport.run(GuestScripts.remove([guestArchive], os: endpoint.os), standardInput: nil, timeout: .seconds(15))
+    await removeGuest([guestArchive], endpoint)
 
     let archive = try temporaryHostFile(extension: "tgz")
     defer { try? FileManager.default.removeItem(at: archive) }
     try data.write(to: archive)
-    return try await HostArchiver.extract(archive, into: directory.appendingPathComponent(UUID().uuidString, isDirectory: true))
+    let destination = directory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    do {
+      return try await HostArchiver.extract(archive, into: destination)
+    } catch {
+      try? FileManager.default.removeItem(at: destination)
+      throw error
+    }
   }
 
   // MARK: Verified transfer
@@ -162,24 +194,27 @@ public actor ClipboardBridge {
     let expected = Digest.sha256(data)
     let os = endpoint.os
     let small = data.count <= options.chunkSize
+    let operation = "copy data into the guest"
     if small || options.allowsFastPath {
       let attempts = small ? options.maxRetries : 1
       for _ in 0..<attempts {
-        let output = try await checked(endpoint, GuestScripts.writeFile(guestPath, os: os), input: data, timeout: timeout(for: data.count))
+        let output = try await checked(
+          endpoint, GuestScripts.writeFile(guestPath, os: os), input: data, operation: operation,
+          timeout: timeout(for: data.count))
         if output.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines) == expected { return }
       }
       if small { throw GuestTransportError.integrityCheckFailed("upload of \(data.count) bytes to \(guestPath)") }
     }
 
     chunkedTransferCount += 1
-    _ = try await checked(endpoint, GuestScripts.truncateFile(guestPath, os: os), timeout: .seconds(15))
+    _ = try await checked(endpoint, GuestScripts.truncateFile(guestPath, os: os), operation: operation, timeout: .seconds(15))
     for (index, chunk) in chunks(of: data).enumerated() {
       let chunkHash = Digest.sha256(chunk)
       var verified = false
       for _ in 0..<options.maxRetries {
         let output = try await checked(
           endpoint, GuestScripts.writeChunk(guestPath, index: index, chunkSize: options.chunkSize, os: os),
-          input: chunk, timeout: .seconds(30))
+          input: chunk, operation: operation, timeout: .seconds(30))
         if output.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines) == chunkHash {
           verified = true
           break
@@ -198,10 +233,12 @@ public actor ClipboardBridge {
     let info = try await fileInfo(guestPath, endpoint: endpoint)
     let os = endpoint.os
     let small = info.size <= options.chunkSize
+    let operation = "copy data from the guest"
     if small || options.allowsFastPath {
       let attempts = small ? options.maxRetries : 1
       for _ in 0..<attempts {
-        let output = try await checked(endpoint, GuestScripts.readFile(guestPath, os: os), timeout: timeout(for: info.size))
+        let output = try await checked(
+          endpoint, GuestScripts.readFile(guestPath, os: os), operation: operation, timeout: timeout(for: info.size))
         if output.stdout.count == info.size, Digest.sha256(output.stdout) == info.sha256 { return output.stdout }
       }
       if small { throw GuestTransportError.integrityCheckFailed("download of \(guestPath)") }
@@ -209,14 +246,16 @@ public actor ClipboardBridge {
 
     chunkedTransferCount += 1
     let hashes = try await checked(
-      endpoint, GuestScripts.chunkHashes(guestPath, chunkSize: options.chunkSize, os: os), timeout: timeout(for: info.size)
+      endpoint, GuestScripts.chunkHashes(guestPath, chunkSize: options.chunkSize, os: os), operation: operation,
+      timeout: timeout(for: info.size)
     ).stdoutString.split(whereSeparator: \.isNewline).map(String.init)
     var data = Data(capacity: info.size)
     for (index, expected) in hashes.enumerated() {
       var block: Data?
       for _ in 0..<options.maxRetries {
         let output = try await checked(
-          endpoint, GuestScripts.readChunk(guestPath, index: index, chunkSize: options.chunkSize, os: os), timeout: .seconds(30))
+          endpoint, GuestScripts.readChunk(guestPath, index: index, chunkSize: options.chunkSize, os: os),
+          operation: operation, timeout: .seconds(30))
         if Digest.sha256(output.stdout) == expected {
           block = output.stdout
           break
@@ -236,7 +275,7 @@ public actor ClipboardBridge {
   private func pushToMacOS(_ payload: ClipboardPayload, endpoint: GuestEndpoint) async throws -> GuestClipboardState {
     var guestFiles: [String] = []
     if !payload.files.isEmpty {
-      guestFiles = try await sendFiles(payload.files, to: endpoint, guestDirectory: stagingPath(endpoint, UUID().uuidString))
+      guestFiles = try await sendFiles(payload.files, to: endpoint, guestDirectory: try await newGuestStagingFolder(endpoint))
     }
     let body = try JSONEncoder().encode(
       MacOSWritePayload(
@@ -244,46 +283,66 @@ public actor ClipboardBridge {
 
     let command: [String]
     var input: Data?
+    var staged: String?
     if body.count <= options.chunkSize {
       command = GuestScripts.macOSWrite(pasteboardName: options.guestPasteboardName)
       input = body
     } else {
-      let staged = stagingPath(endpoint, "\(UUID().uuidString).json")
-      try await upload(body, to: staged, endpoint: endpoint)
-      command = GuestScripts.macOSWrite(pasteboardName: options.guestPasteboardName, payloadFile: staged)
+      let path = stagingPath(endpoint, "\(UUID().uuidString).json")
+      staged = path
+      do {
+        try await upload(body, to: path, endpoint: endpoint)
+      } catch {
+        await removeGuest([path], endpoint)
+        throw error
+      }
+      command = GuestScripts.macOSWrite(pasteboardName: options.guestPasteboardName, payloadFile: path)
     }
-    let output = try await checked(endpoint, command, input: input, timeout: timeout(for: body.count))
+    let output: CommandOutput
+    do {
+      output = try await checked(
+        endpoint, command, input: input, operation: "set the guest clipboard", timeout: timeout(for: body.count))
+    } catch {
+      if let staged { await removeGuest([staged], endpoint) }
+      throw error
+    }
     let reply = try decode(ChangeCountReply.self, from: output.stdout)
     return GuestClipboardState(changeCount: reply.changeCount, fingerprint: payload.fingerprint)
   }
 
-  private func pullFromMacOS(_ endpoint: GuestEndpoint, maxBytes: Int?) async throws -> ClipboardPayload? {
+  private func pullFromMacOS(_ endpoint: GuestEndpoint, maxBytes: Int?, includeFiles: Bool) async throws -> ClipboardPayload? {
     let output = try await checked(
       endpoint,
       GuestScripts.macOSRead(
         pasteboardName: options.guestPasteboardName, stagingDirectory: stagingRoot(endpoint),
         inlineLimit: options.inlineLimit),
-      timeout: .seconds(60))
+      operation: "read the guest clipboard", timeout: .seconds(60))
     let manifest = try decode(GuestManifest.self, from: output.stdout)
 
     if !manifest.files.isEmpty {
+      guard includeFiles else { return nil }
       let paths = manifest.files.compactMap(\.path)
       let total = manifest.files.reduce(0) { $0 + ($1.size ?? 0) }
       if let maxBytes, total > maxBytes { throw GuestTransportError.tooLarge(bytes: total, limit: maxBytes) }
+      pruneHostStaging(keeping: options.stagingFoldersToKeep - 1)
       let local = try await receiveFiles(paths, from: endpoint, into: fileStagingDirectory)
       return ClipboardPayload(files: ordered(local, like: paths))
     }
 
     var entries = manifest.items
     if let staged = manifest.staged {
-      // Base64 inflates by 4/3; compare the decoded size with the limit.
-      if let maxBytes, staged.size * 3 / 4 > maxBytes {
-        _ = try? await endpoint.transport.run(GuestScripts.remove([staged.path], os: .macOS), standardInput: nil, timeout: .seconds(15))
-        throw GuestTransportError.tooLarge(bytes: staged.size * 3 / 4, limit: maxBytes)
+      do {
+        // Base64 inflates by 4/3; compare the decoded size with the limit.
+        if let maxBytes, staged.size * 3 / 4 > maxBytes {
+          throw GuestTransportError.tooLarge(bytes: staged.size * 3 / 4, limit: maxBytes)
+        }
+        let data = try await download(staged.path, endpoint: endpoint)
+        await removeGuest([staged.path], endpoint)
+        entries = try decode(StagedItems.self, from: data).items
+      } catch {
+        await removeGuest([staged.path], endpoint)
+        throw error
       }
-      let data = try await download(staged.path, endpoint: endpoint)
-      _ = try? await endpoint.transport.run(GuestScripts.remove([staged.path], os: .macOS), standardInput: nil, timeout: .seconds(15))
-      entries = try decode(StagedItems.self, from: data).items
     }
     let items = entries.compactMap { entry -> ClipboardRepresentation? in
       guard let encoded = entry.data, let data = Data(base64Encoded: encoded) else { return nil }
@@ -296,48 +355,83 @@ public actor ClipboardBridge {
 
   // MARK: Linux guests
 
+  /// Linux clipboard tools serve one flavour per selection owner, so the richest flavour that
+  /// carries the content (files, then plain text, then PNG, then HTML) is pushed. The returned
+  /// state fingerprints that projection, which lets the sync session recognise it when it comes
+  /// back instead of downgrading the host's richer clipboard.
   private func pushToLinux(_ payload: ClipboardPayload, endpoint: GuestEndpoint) async throws -> GuestClipboardState {
     let mime: String
     let data: Data
+    let projection: String
     if !payload.files.isEmpty {
-      let paths = try await sendFiles(payload.files, to: endpoint, guestDirectory: stagingPath(endpoint, UUID().uuidString))
+      let folder = try await newGuestStagingFolder(endpoint)
+      let paths = try await sendFiles(payload.files, to: endpoint, guestDirectory: folder)
       mime = "text/uri-list"
       data = Data(paths.map { URL(fileURLWithPath: $0).absoluteString }.joined(separator: "\r\n").utf8)
-    } else if let text = payload.data(for: ClipboardRepresentation.plainText) {
-      (mime, data) = ("text/plain", text)
-    } else if let png = payload.data(for: ClipboardRepresentation.png) {
-      (mime, data) = ("image/png", png)
-    } else if let html = payload.data(for: ClipboardRepresentation.html) {
-      (mime, data) = ("text/html", html)
+      projection = payload.fingerprint
+    } else if let flavour = Self.linuxProjection(of: payload) {
+      (mime, data) = (flavour.mime, flavour.representation.data)
+      projection = ClipboardPayload(items: [flavour.representation]).fingerprint
     } else {
       throw GuestTransportError.unsupported("Linux guests accept text, HTML, PNG images and files.")
     }
     let staged = stagingPath(endpoint, "\(UUID().uuidString).bin")
-    try await upload(data, to: staged, endpoint: endpoint)
-    let output = try await checked(endpoint, GuestScripts.linuxWrite(mime: mime, stagedFile: staged), timeout: .seconds(30))
-    let reply = try decode(ChangeCountReply.self, from: output.stdout)
-    return GuestClipboardState(changeCount: reply.changeCount, fingerprint: payload.fingerprint)
+    do {
+      try await upload(data, to: staged, endpoint: endpoint)
+      let output = try await checked(
+        endpoint, GuestScripts.linuxWrite(mime: mime, stagedFile: staged), operation: "set the guest clipboard",
+        timeout: .seconds(30))
+      let reply = try decode(ChangeCountReply.self, from: output.stdout)
+      return GuestClipboardState(changeCount: reply.changeCount, fingerprint: projection)
+    } catch {
+      await removeGuest([staged], endpoint)
+      throw error
+    }
   }
 
-  private func pullFromLinux(_ endpoint: GuestEndpoint, maxBytes: Int?) async throws -> ClipboardPayload? {
-    let output = try await checked(endpoint, GuestScripts.linuxRead(stagingDirectory: stagingRoot(endpoint)), timeout: .seconds(30))
+  /// The single flavour a Linux guest receives for a non-file payload.
+  static func linuxProjection(of payload: ClipboardPayload) -> (mime: String, representation: ClipboardRepresentation)? {
+    for (type, mime) in [
+      (ClipboardRepresentation.plainText, "text/plain"), (ClipboardRepresentation.png, "image/png"),
+      (ClipboardRepresentation.html, "text/html"),
+    ] {
+      if let data = payload.data(for: type) { return (mime, ClipboardRepresentation(type: type, data: data)) }
+    }
+    return nil
+  }
+
+  private func pullFromLinux(_ endpoint: GuestEndpoint, maxBytes: Int?, includeFiles: Bool) async throws -> ClipboardPayload? {
+    let output = try await checked(
+      endpoint, GuestScripts.linuxRead(stagingDirectory: stagingRoot(endpoint)), operation: "read the guest clipboard",
+      timeout: .seconds(30))
     let manifest = try decode(GuestManifest.self, from: output.stdout)
     let stagedPaths = manifest.items.compactMap(\.path)
-    defer {
-      if !stagedPaths.isEmpty {
-        Task { [transport = endpoint.transport] in
-          _ = try? await transport.run(GuestScripts.remove(stagedPaths, os: .linux), standardInput: nil, timeout: .seconds(15))
-        }
-      }
+    do {
+      let payload = try await readLinuxManifest(manifest, endpoint: endpoint, maxBytes: maxBytes, includeFiles: includeFiles)
+      await removeGuest(stagedPaths, endpoint)
+      return payload
+    } catch {
+      await removeGuest(stagedPaths, endpoint)
+      throw error
     }
+  }
 
+  private func readLinuxManifest(
+    _ manifest: GuestManifest, endpoint: GuestEndpoint, maxBytes: Int?, includeFiles: Bool
+  ) async throws -> ClipboardPayload? {
     let filePaths = manifest.files.compactMap { $0.uri.flatMap(URL.init(string:))?.path ?? $0.path }
     if !filePaths.isEmpty {
-      let local = try await receiveFiles(filePaths, from: endpoint, into: fileStagingDirectory)
+      guard includeFiles else { return nil }
       if let maxBytes {
-        let total = local.reduce(0) { $0 + ClipboardPayload.byteCount(of: $1) }
+        // Measure in the guest first, so nothing is copied when the files are over the limit.
+        let sizes = try await checked(
+          endpoint, GuestScripts.pathSizes(filePaths, os: endpoint.os), operation: "measure the guest files",
+          timeout: .seconds(60))
+        let total = Int(sizes.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
         if total > maxBytes { throw GuestTransportError.tooLarge(bytes: total, limit: maxBytes) }
       }
+      pruneHostStaging(keeping: options.stagingFoldersToKeep - 1)
+      let local = try await receiveFiles(filePaths, from: endpoint, into: fileStagingDirectory)
       return ClipboardPayload(files: ordered(local, like: filePaths))
     }
 
@@ -351,10 +445,45 @@ public actor ClipboardBridge {
     return items.isEmpty ? nil : ClipboardPayload(items: items)
   }
 
+  // MARK: Staging
+
+  /// A new, unique guest staging folder, after pruning the oldest ones.
+  private func newGuestStagingFolder(_ endpoint: GuestEndpoint) async throws -> String {
+    _ = try? await endpoint.transport.run(
+      GuestScripts.pruneStaging(stagingRoot(endpoint), keep: options.stagingFoldersToKeep - 1, os: endpoint.os),
+      standardInput: nil, timeout: .seconds(15))
+    return stagingPath(endpoint, UUID().uuidString)
+  }
+
+  /// Keeps the `keep` newest per-transfer folders in `fileStagingDirectory` (UUID-named only).
+  private func pruneHostStaging(keeping keep: Int) {
+    let keys: Set<URLResourceKey> = [.isDirectoryKey, .creationDateKey]
+    guard
+      let entries = try? FileManager.default.contentsOfDirectory(
+        at: fileStagingDirectory, includingPropertiesForKeys: Array(keys), options: [.skipsHiddenFiles])
+    else { return }
+    let folders = entries.compactMap { url -> (url: URL, created: Date)? in
+      guard UUID(uuidString: url.lastPathComponent) != nil,
+        let values = try? url.resourceValues(forKeys: keys), values.isDirectory == true
+      else { return nil }
+      return (url, values.creationDate ?? .distantPast)
+    }
+    for folder in folders.sorted(by: { $0.created > $1.created }).dropFirst(max(0, keep)) {
+      try? FileManager.default.removeItem(at: folder.url)
+    }
+  }
+
+  /// Best-effort removal of guest temporaries.
+  private func removeGuest(_ paths: [String], _ endpoint: GuestEndpoint) async {
+    guard !paths.isEmpty else { return }
+    _ = try? await endpoint.transport.run(GuestScripts.remove(paths, os: endpoint.os), standardInput: nil, timeout: .seconds(15))
+  }
+
   // MARK: Helpers
 
   private func fileInfo(_ path: String, endpoint: GuestEndpoint) async throws -> (size: Int, sha256: String) {
-    let output = try await checked(endpoint, GuestScripts.fileInfo(path, os: endpoint.os), timeout: .seconds(120))
+    let output = try await checked(
+      endpoint, GuestScripts.fileInfo(path, os: endpoint.os), operation: "check a guest file", timeout: .seconds(120))
     let fields = output.stdoutString.split(whereSeparator: \.isWhitespace)
     guard fields.count == 2, let size = Int(fields[0]) else {
       throw GuestTransportError.unexpectedOutput(output.stdoutString)
@@ -363,15 +492,21 @@ public actor ClipboardBridge {
   }
 
   /// Runs a guest command and throws unless it exits successfully.
+  ///
+  /// - Parameter operation: What the command does, for error messages ("Couldn't <operation>: …").
   private func checked(
-    _ endpoint: GuestEndpoint, _ command: [String], input: Data? = nil, timeout: Duration
+    _ endpoint: GuestEndpoint, _ command: [String], input: Data? = nil, operation: String, timeout: Duration
   ) async throws -> CommandOutput {
     let output = try await endpoint.transport.run(command, standardInput: input, timeout: timeout)
     guard output.succeeded else {
       if endpoint.os == .linux, output.status == GuestScripts.linuxUnsupportedStatus {
         throw GuestTransportError.unsupported(output.diagnostic)
       }
-      throw GuestTransportError.commandFailed(status: output.status, message: GuestProbe.friendlyReason(for: output.diagnostic, status: output.status))
+      throw GuestTransportError.commandFailed(
+        status: output.status,
+        message: GuestProbe.commandReason(
+          for: output.diagnostic, status: output.status, operation: operation,
+          isSSH: endpoint.transport is SSHTransport))
     }
     return output
   }
@@ -410,7 +545,7 @@ public actor ClipboardBridge {
 
   /// Sorts extracted entries to follow the guest's original order.
   private func ordered(_ local: [URL], like guestPaths: [String]) -> [URL] {
-    let order = Dictionary(guestPaths.enumerated().map { ($1.split(separator: "/").last.map(String.init) ?? $1, $0) }) { first, _ in first }
+    let order = Dictionary(guestPaths.enumerated().map { (GuestScripts.splitGuestPath($1).name, $0) }) { first, _ in first }
     return local.sorted { (order[$0.lastPathComponent] ?? .max) < (order[$1.lastPathComponent] ?? .max) }
   }
 }

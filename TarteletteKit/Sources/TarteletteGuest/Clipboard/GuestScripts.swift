@@ -103,17 +103,64 @@ public enum GuestScripts {
     shell(#"for p in "$@"; do rm -rf "$(x "$p")"; done"#, paths, os: os)
   }
 
-  /// Archives guest paths (`tar -czf`) into `archive`. Each path is stored under its last component.
+  /// Splits a guest path into its folder (`~` kept for the guest shell to expand) and last component.
+  static func splitGuestPath(_ path: String) -> (directory: String, name: String) {
+    var trimmed = path
+    while trimmed.count > 1, trimmed.hasSuffix("/") { trimmed.removeLast() }
+    guard let slash = trimmed.lastIndex(of: "/") else { return (".", trimmed) }
+    let directory = String(trimmed[..<slash])
+    return (directory.isEmpty ? "/" : directory, String(trimmed[trimmed.index(after: slash)...]))
+  }
+
+  /// Archives guest paths (`tar -czf`) into `archive`. Each path is stored under its last component
+  /// (as `./name`, so names starting with "-" aren't read as options); `~` is expanded in the guest.
+  /// Callers must reject duplicate last components first (`GuestTransferError.checkUniqueNames`).
   public static func createArchive(_ archive: String, paths: [String], os: VMOperatingSystem) -> [String] {
     var arguments = [archive]
     for path in paths {
-      let url = URL(fileURLWithPath: path)
-      arguments += ["-C", url.deletingLastPathComponent().path, url.lastPathComponent]
+      let (directory, name) = splitGuestPath(path)
+      arguments += [directory, name]
     }
+    // Rebuilds "$@" as `-C <dir> ./<name>` triples: each step consumes one (dir, name) pair from
+    // the front and appends the expanded triple at the end.
     return shell(
       #"""
-      out=$(x "$1"); shift; umask 077; mkdir -p "$(dirname "$out")" && COPYFILE_DISABLE=1 exec tar -czf "$out" "$@"
+      out=$(x "$1"); shift; umask 077; mkdir -p "$(dirname "$out")" || exit 1
+      n=$#; i=0
+      while [ "$i" -lt "$n" ]; do d=$(x "$1"); f=$2; shift 2; set -- "$@" -C "$d" "./$f"; i=$((i + 2)); done
+      COPYFILE_DISABLE=1 exec tar -czf "$out" "$@"
       """#, arguments, os: os)
+  }
+
+  /// Prints the total size in bytes of guest files or folders (`du`, so rounded up to blocks).
+  public static func pathSizes(_ paths: [String], os: VMOperatingSystem) -> [String] {
+    shell(
+      #"""
+      t=0
+      for p in "$@"; do k=$(du -sk "$(x "$p")" 2>/dev/null | cut -f1); t=$((t + ${k:-0})); done
+      printf '%s\n' "$((t * 1024))"
+      """#, paths, os: os)
+  }
+
+  /// Keeps the `keep` most recently modified staging folders in `root` and removes older ones.
+  ///
+  /// Scoped tightly: only direct children of `root` named like a UUID (the folders the bridge
+  /// creates) are candidates, and nothing happens unless `root` is a Tartelette staging folder.
+  public static func pruneStaging(_ root: String, keep: Int, os: VMOperatingSystem) -> [String] {
+    shell(
+      #"""
+      r=$(x "$1"); keep=$2
+      case "$r" in *[Tt]artelette*) ;; *) exit 0 ;; esac
+      [ -d "$r" ] || exit 0
+      i=0
+      ls -1t "$r" 2>/dev/null | while IFS= read -r e; do
+        case "$e" in ????????-????-????-????-????????????) ;; *) continue ;; esac
+        [ -d "$r/$e" ] || continue
+        i=$((i + 1))
+        [ "$i" -gt "$keep" ] && rm -rf "$r/$e"
+      done
+      exit 0
+      """#, [root, String(max(0, keep))], os: os)
   }
 
   /// Extracts a guest archive into `directory` without overwriting: clashing names get a " 2", " 3"…

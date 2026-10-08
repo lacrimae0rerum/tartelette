@@ -66,6 +66,35 @@ struct GuestMetricsTests {
     #expect(sample.processCount == 142)
   }
 
+  @Test func extremeGuestNumbersYieldNilInsteadOfTrapping() {
+    let huge = String(UInt64.max)
+    let macOS = """
+      memsize=\(huge)
+      vm:Mach Virtual Memory Statistics: (page size of 16384 bytes)
+      vm:Pages wired down:                \(huge).
+      vm:Anonymous pages:                 \(huge).
+      vm:Pages occupied by compressor:    10.
+      df:/dev/disk3s5  \(huge) 1 \(huge)    1% 1 1    0%   /
+      """
+    let mac = GuestMetricsCollector.parseMacOS(macOS)
+    #expect(mac.memoryUsedBytes == nil)
+    #expect(mac.diskTotalBytes == nil)
+    #expect(mac.diskUsedBytes == nil)
+
+    let linuxOutput = """
+      mem:MemTotal:        \(huge) kB
+      mem:MemAvailable:    1 kB
+      stat1:cpu  \(huge) \(huge) 0 0 0
+      stat2:cpu  \(huge) \(huge) 0 0 0
+      df:/dev/vda1       \(huge) 1 \(huge)  1% /
+      """
+    let linux = GuestMetricsCollector.parseLinux(linuxOutput)
+    #expect(linux.memoryTotalBytes == nil)
+    #expect(linux.memoryUsedBytes == nil)
+    #expect(linux.cpuPercent == nil)
+    #expect(linux.diskTotalBytes == nil)
+  }
+
   @Test func toleratesMissingRecords() {
     let sample = GuestMetricsCollector.parseMacOS("loadavg={ 1.0 2.0 3.0 }\n")
     #expect(sample.loadAverage == [1, 2, 3])

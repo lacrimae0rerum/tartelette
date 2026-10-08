@@ -26,7 +26,8 @@ public struct ClipboardPayload: Sendable, Equatable {
   public let items: [ClipboardRepresentation]
   /// Host-local file URLs.
   public let files: [URL]
-  /// Stable identity used to detect echoes: SHA-256 over sorted flavours and file names + sizes.
+  /// Stable identity used to detect echoes: SHA-256 over sorted flavours and, for files, their
+  /// names, sizes, modification dates and (up to `contentHashLimit`) contents.
   public let fingerprint: String
 
   public init(items: [ClipboardRepresentation] = [], files: [URL] = []) {
@@ -72,6 +73,10 @@ public struct ClipboardPayload: Sendable, Equatable {
     return "Empty"
   }
 
+  /// Files up to this size contribute their contents to the fingerprint; larger files and folder
+  /// contents contribute size and modification date only.
+  static let contentHashLimit = 16 * 1024 * 1024
+
   static func fingerprint(items: [ClipboardRepresentation], files: [URL]) -> String {
     var hasher = SHA256()
     for item in items.sorted(by: { $0.type < $1.type }) {
@@ -79,9 +84,45 @@ public struct ClipboardPayload: Sendable, Equatable {
       hasher.update(data: item.data)
     }
     for file in files.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
-      hasher.update(data: Data("file:\(file.lastPathComponent):\(byteCount(of: file))\n".utf8))
+      hasher.update(data: Data("file:\(file.lastPathComponent)\n".utf8))
+      updateFileIdentity(&hasher, file)
     }
     return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+  }
+
+  /// Adds what identifies a file's contents: size and modification date (whole seconds, which tar
+  /// preserves across transfers) plus a content hash for small files; for folders, the same for
+  /// every entry, keyed by relative path.
+  private static func updateFileIdentity(_ hasher: inout SHA256, _ url: URL) {
+    let keys: Set<URLResourceKey> = [.isDirectoryKey, .fileSizeKey, .contentModificationDateKey]
+    guard let values = try? url.resourceValues(forKeys: keys) else {
+      hasher.update(data: Data("missing\n".utf8))
+      return
+    }
+    func stamp(_ values: URLResourceValues) -> String {
+      let seconds = values.contentModificationDate.map { Int64($0.timeIntervalSince1970.rounded(.down)) } ?? 0
+      return "\(values.fileSize ?? 0):\(seconds)"
+    }
+    guard values.isDirectory == true else {
+      hasher.update(data: Data("size-mtime:\(stamp(values))\n".utf8))
+      if let size = values.fileSize, size <= contentHashLimit,
+        let data = try? Data(contentsOf: url, options: .mappedIfSafe)
+      {
+        hasher.update(data: data)
+      }
+      return
+    }
+    guard let enumerator = FileManager.default.enumerator(at: url, includingPropertiesForKeys: Array(keys)) else {
+      return
+    }
+    let rootLength = url.standardizedFileURL.path.count
+    var entries: [String] = []
+    for case let child as URL in enumerator {
+      guard let childValues = try? child.resourceValues(forKeys: keys) else { continue }
+      let relative = String(child.standardizedFileURL.path.dropFirst(rootLength))
+      entries.append("\(relative):\(childValues.isDirectory == true ? "dir" : stamp(childValues))")
+    }
+    for entry in entries.sorted() { hasher.update(data: Data("entry:\(entry)\n".utf8)) }
   }
 
   /// Size of a file, or the summed size of a directory tree.

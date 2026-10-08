@@ -10,7 +10,10 @@ public struct GuestMetricsCollector: Sendable {
     let output = try await endpoint.transport.run(command(for: endpoint.os), standardInput: nil, timeout: timeout)
     guard output.succeeded else {
       throw GuestTransportError.commandFailed(
-        status: output.status, message: GuestProbe.friendlyReason(for: output.diagnostic, status: output.status))
+        status: output.status,
+        message: GuestProbe.commandReason(
+          for: output.diagnostic, status: output.status, operation: "read guest metrics",
+          isSSH: endpoint.transport is SSHTransport))
     }
     switch endpoint.os {
     case .linux: return parseLinux(output.stdoutString)
@@ -71,7 +74,8 @@ public struct GuestMetricsCollector: Sendable {
     } else {
       app = pages["Pages active"] ?? 0
     }
-    return (app + wired + compressed) * pageSize
+    // Guest-supplied numbers: overflow means nonsense input, which yields nil instead of a trap.
+    return Checked.product(Checked.sum([app, wired, compressed]), pageSize)
   }
 
   /// `CPU usage: 13.78% user, 9.67% sys, 76.53% idle` → 23.47
@@ -110,7 +114,9 @@ public struct GuestMetricsCollector: Sendable {
     var memory: [String: UInt64] = [:]
     for line in records.lines("mem") {
       let parts = line.split(whereSeparator: { $0 == ":" || $0 == " " })
-      if parts.count >= 2, let kilobytes = UInt64(parts[1]) { memory[String(parts[0])] = kilobytes * 1024 }
+      if parts.count >= 2, let kilobytes = UInt64(parts[1]), let bytes = Checked.product(kilobytes, 1024) {
+        memory[String(parts[0])] = bytes
+      }
     }
     if let total = memory["MemTotal"] {
       sample.memoryTotalBytes = total
@@ -131,10 +137,13 @@ public struct GuestMetricsCollector: Sendable {
     let a = fields(first)
     let b = fields(second)
     guard a.count >= 4, b.count == a.count else { return nil }
-    let idle = { (values: [UInt64]) in values[3] + (values.count > 4 ? values[4] : 0) }
-    let total = Double(b.reduce(0, +) - min(b.reduce(0, +), a.reduce(0, +)))
+    let idle = { (values: [UInt64]) in Checked.sum([values[3], values.count > 4 ? values[4] : 0]) }
+    guard let sumA = Checked.sum(a), let sumB = Checked.sum(b), let idleA = idle(a), let idleB = idle(b) else {
+      return nil
+    }
+    let total = Double(sumB - min(sumB, sumA))
     guard total > 0 else { return 0 }
-    let idleDelta = Double(idle(b) - min(idle(b), idle(a)))
+    let idleDelta = Double(idleB - min(idleB, idleA))
     return max(0, min(100, (1 - idleDelta / total) * 100))
   }
 
@@ -149,10 +158,31 @@ public struct GuestMetricsCollector: Sendable {
   /// `df -k` row: total = 1K-blocks, used = total − available (counts all volumes sharing the container).
   static func parseDF(_ line: String) -> (total: UInt64?, used: UInt64?) {
     let columns = line.split(separator: " ")
-    guard columns.count >= 4, let total = UInt64(columns[1]), let available = UInt64(columns[3]) else {
+    guard columns.count >= 4, let total = UInt64(columns[1]), let available = UInt64(columns[3]),
+      let totalBytes = Checked.product(total, 1024)
+    else {
       return (nil, nil)
     }
-    return (total * 1024, (total - min(total, available)) * 1024)
+    return (totalBytes, Checked.product(total - min(total, available), 1024))
+  }
+
+  /// Overflow-aware arithmetic for numbers parsed from guest output.
+  enum Checked {
+    static func sum(_ values: [UInt64]) -> UInt64? {
+      var total: UInt64 = 0
+      for value in values {
+        let (result, overflow) = total.addingReportingOverflow(value)
+        if overflow { return nil }
+        total = result
+      }
+      return total
+    }
+
+    static func product(_ value: UInt64?, _ factor: UInt64) -> UInt64? {
+      guard let value else { return nil }
+      let (result, overflow) = value.multipliedReportingOverflow(by: factor)
+      return overflow ? nil : result
+    }
   }
 
   /// Indexes `key=value` and `prefix:line` records.
