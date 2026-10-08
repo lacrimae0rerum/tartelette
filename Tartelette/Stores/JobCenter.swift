@@ -26,7 +26,9 @@ final class Job: Identifiable {
   let command: TartCommand
   let title: String
   let commandLine: String
-  let standardInput: Data?
+  /// Jobs fed through stdin (e.g. `tart login --password-stdin`) can't be retried: the input is
+  /// handed to Tart once and never retained, so secrets don't linger in the job history.
+  let canRetry: Bool
   let startedAt = Date()
   private(set) var state: State = .running
   private(set) var progress: Double?
@@ -43,7 +45,7 @@ final class Job: Identifiable {
     self.command = command
     self.title = title ?? command.title
     self.commandLine = command.commandLine
-    self.standardInput = standardInput
+    self.canRetry = standardInput == nil
   }
 
   var isActive: Bool { state == .running }
@@ -171,9 +173,10 @@ final class JobCenter {
     }
   }
 
-  /// Runs the job's command again.
+  /// Runs the job's command again (only for jobs that didn't take standard input).
   func retry(_ job: Job) {
-    run(job.command, standardInput: job.standardInput, title: job.title)
+    guard job.canRetry else { return }
+    run(job.command, title: job.title)
   }
 
   func clearFinished() {

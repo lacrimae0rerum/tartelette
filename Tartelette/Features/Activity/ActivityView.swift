@@ -98,7 +98,9 @@ struct JobRow: View {
       Button("Copy Output", systemImage: "text.alignleft") { copy(job.lines.map(\.text).joined(separator: "\n")) }
       if !job.isActive {
         Divider()
-        Button("Run Again", systemImage: "arrow.clockwise") { model.jobs.retry(job) }
+        if job.canRetry {
+          Button("Run Again", systemImage: "arrow.clockwise") { model.jobs.retry(job) }
+        }
         Button("Remove", systemImage: "trash") { model.jobs.remove(job) }
       }
     }
@@ -122,10 +124,7 @@ struct JobRow: View {
       Button("Cancel") { job.cancel() }
         .controlSize(.small)
         .help("Stop this command (Tart cleans up temporary files)")
-    } else if case .failed = job.state {
-      Button("Retry") { model.jobs.retry(job) }
-        .controlSize(.small)
-    } else if case .cancelled = job.state {
+    } else if job.canRetry, job.state != .succeeded {
       Button("Retry") { model.jobs.retry(job) }
         .controlSize(.small)
     }
