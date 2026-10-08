@@ -22,8 +22,12 @@ struct TartMissingView: View {
           .foregroundStyle(.secondary)
           .frame(maxWidth: 460)
       }
-      CommandPreview(commandLine: "brew install openai/tools/tart") {
-        try? TerminalLauncher.open(commandLine: "brew install openai/tools/tart", title: "Install Tart")
+      CommandPreview(commandLine: Links.installCommand) {
+        do {
+          try TerminalLauncher.open(commandLine: Links.installCommand, title: "Install Tart")
+        } catch {
+          model.navigation.show(error: error, title: "Couldn't open Terminal")
+        }
       }
       .frame(maxWidth: 420)
       HStack(spacing: 12) {
