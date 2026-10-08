@@ -16,6 +16,7 @@
 
 import AppKit
 import CoreGraphics
+import CryptoKit
 import Foundation
 import ImageIO
 import UniformTypeIdentifiers
@@ -162,6 +163,41 @@ func recreateDirectory(_ url: URL) throws {
   let fm = FileManager.default
   if fm.fileExists(atPath: url.path) { try fm.removeItem(at: url) }
   try fm.createDirectory(at: url, withIntermediateDirectories: true)
+}
+
+/// Moves a fully rendered item over `destination` (replacing it in one step when it exists).
+func installItem(_ staged: URL, at destination: URL) throws {
+  let fm = FileManager.default
+  if fm.fileExists(atPath: destination.path) {
+    _ = try fm.replaceItemAt(destination, withItemAt: staged)
+  } else {
+    try fm.moveItem(at: staged, to: destination)
+  }
+}
+
+/// CoreGraphics stamps every PDF with the current date and a random document ID. Pin both, using
+/// replacements of identical byte length so the cross-reference offsets stay valid, so that
+/// re-rendering produces byte-identical files.
+func normalizePDF(at url: URL) throws {
+  let data = try Data(contentsOf: url)
+  // Latin-1 maps every byte to one character, so binary streams round-trip unchanged.
+  guard var text = String(data: data, encoding: .isoLatin1) else { throw BrandKitError.write(url) }
+  text = text.replacingOccurrences(
+    of: #"D:\d{14}Z00'00'"#, with: "D:20260101000000Z00'00'", options: .regularExpression)
+  guard let trailer = text.range(of: "trailer", options: .backwards) else {
+    try Data(text.utf8).write(to: url)
+    return
+  }
+  let zeroID = "<" + String(repeating: "0", count: 32) + ">"
+  var tail = String(text[trailer.lowerBound...])
+  tail = tail.replacingOccurrences(of: "<[0-9a-fA-F]{32}>", with: zeroID, options: .regularExpression)
+  text = String(text[..<trailer.lowerBound]) + tail
+  guard let zeroed = text.data(using: .isoLatin1) else { throw BrandKitError.write(url) }
+  let digest = SHA256.hash(data: zeroed).prefix(16).map { String(format: "%02x", $0) }.joined()
+  tail = tail.replacingOccurrences(of: zeroID, with: "<\(digest)>")
+  text = String(text[..<trailer.lowerBound]) + tail
+  guard let normalized = text.data(using: .isoLatin1) else { throw BrandKitError.write(url) }
+  try normalized.write(to: url)
 }
 
 enum BrandKitError: Error { case write(URL) }
@@ -469,6 +505,7 @@ func renderMenuBarIcon(named name: String, filled: Bool, into catalog: URL) thro
 
   ctx.endPDFPage()
   ctx.closePDF()
+  try normalizePDF(at: url)
 
   try writeJSON(
     [
@@ -532,15 +569,32 @@ let projectDir = URL(fileURLWithPath: arguments[1], isDirectory: true).standardi
 let appDir = projectDir.appendingPathComponent("Tartelette", isDirectory: true)
 let catalog = appDir.appendingPathComponent("Assets.xcassets", isDirectory: true)
 
-do {
-  try FileManager.default.createDirectory(at: catalog, withIntermediateDirectories: true)
-  try writeJSON(["info": catalogInfo], to: catalog.appendingPathComponent("Contents.json"))
+// Everything is rendered into a staging directory first (same volume, so moves are renames) and
+// only swapped into the project once every file was written: a failure halfway leaves the
+// committed assets untouched.
+let staging = projectDir.appendingPathComponent(".brandkit-staging-\(UUID().uuidString)", isDirectory: true)
+let stagedApp = staging.appendingPathComponent("Tartelette", isDirectory: true)
+let stagedCatalog = stagedApp.appendingPathComponent("Assets.xcassets", isDirectory: true)
 
-  try renderAppIcon(into: appDir)
-  try renderAccentColor(into: catalog)
-  try renderMenuBarIcon(named: "MenuBarIcon", filled: false, into: catalog)
-  try renderMenuBarIcon(named: "MenuBarIconActive", filled: true, into: catalog)
-  try renderBrandMark(into: catalog)
+do {
+  defer { try? FileManager.default.removeItem(at: staging) }
+  try FileManager.default.createDirectory(at: stagedCatalog, withIntermediateDirectories: true)
+  try writeJSON(["info": catalogInfo], to: stagedCatalog.appendingPathComponent("Contents.json"))
+
+  try renderAppIcon(into: stagedApp)
+  try renderAccentColor(into: stagedCatalog)
+  try renderMenuBarIcon(named: "MenuBarIcon", filled: false, into: stagedCatalog)
+  try renderMenuBarIcon(named: "MenuBarIconActive", filled: true, into: stagedCatalog)
+  try renderBrandMark(into: stagedCatalog)
+
+  try FileManager.default.createDirectory(at: catalog, withIntermediateDirectories: true)
+  try installItem(stagedApp.appendingPathComponent("AppIcon.icon"), at: appDir.appendingPathComponent("AppIcon.icon"))
+  for item in [
+    "Contents.json", "AccentColor.colorset", "MenuBarIcon.imageset", "MenuBarIconActive.imageset",
+    "BrandMark.imageset",
+  ] {
+    try installItem(stagedCatalog.appendingPathComponent(item), at: catalog.appendingPathComponent(item))
+  }
   print("BrandKit: rendered assets into \(appDir.path)")
 } catch {
   FileHandle.standardError.write("BrandKit: \(error)\n".data(using: .utf8)!)
