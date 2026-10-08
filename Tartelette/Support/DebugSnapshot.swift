@@ -12,6 +12,7 @@ import TarteletteKit
 /// ```
 /// Selections: `dashboard`, `images`, `registries`, `storage`, `activity`, `settings`,
 /// `vm:<name>` or `vm:<name>:<tab>` (a `VMDetailTab` raw value), `sheet:<newVM|pull|import|prune|login>`,
+/// `sheet:newVM:<image|macOS|linux|importArchive>`, `sheet:<clone|rename|push|export|delete|stop|run>:<name>`,
 /// `menubar` (opens the menu bar extra), `start:<vm>` (headless) / `stop:<vm>`, `close` (closes
 /// auxiliary windows).
 enum DebugSnapshot {
@@ -29,7 +30,8 @@ enum DebugSnapshot {
       for (step, selection) in selections.enumerated() {
         apply(selection, model: model)
         try? await Task.sleep(for: .seconds(2.5))
-        let name = String(format: "%02d-", step + 1) + selection.replacingOccurrences(of: ":", with: "-")
+        let name = String(format: "%02d-", step + 1)
+          + selection.replacingOccurrences(of: ":", with: "-").replacingOccurrences(of: "/", with: "-")
         capture(named: name, into: folder)
         let inventory = NSApp.windows.map { window in
           "\(type(of: window)) id=\(window.identifier?.rawValue ?? "-") visible=\(window.isVisible) frame=\(window.frame)"
@@ -70,16 +72,30 @@ enum DebugSnapshot {
     case "vm" where parts.count >= 2:
       let tab = parts.count == 3 ? VMDetailTab(rawValue: parts[2]) : nil
       model.navigation.show(parts[1], tab: tab)
-    case "sheet" where parts.count == 2:
-      switch parts[1] {
-      case "newVM": model.navigation.present(.newVM(initialTab: .image))
-      case "pull": model.navigation.present(.pull)
-      case "import": model.navigation.present(.importVM)
-      case "prune": model.navigation.present(.prune)
-      case "login": model.navigation.present(.login)
-      default: break
+    case "sheet" where parts.count >= 2:
+      if let route = sheetRoute(parts[1], argument: parts.count == 3 ? parts[2] : nil) {
+        model.navigation.present(route)
       }
     default: break
+    }
+  }
+
+  /// `sheet:<kind>[:<argument>]`, e.g. `sheet:newVM:linux`, `sheet:clone:dev`, `sheet:delete:a+b`.
+  private static func sheetRoute(_ kind: String, argument: String?) -> SheetRoute? {
+    switch (kind, argument) {
+    case ("newVM", let tab): .newVM(initialTab: tab.flatMap(NewVMTab.init(rawValue:)) ?? .image)
+    case ("pull", _): .pull
+    case ("import", _): .importVM
+    case ("prune", _): .prune
+    case ("login", _): .login
+    case ("clone", let name?): .clone(source: name)
+    case ("rename", let name?): .rename(vm: name)
+    case ("push", let name?): .push(vm: name)
+    case ("export", let name?): .exportVM(vm: name)
+    case ("delete", let names?): .confirmDelete(names: names.split(separator: "+").map(String.init))
+    case ("stop", let name?): .stopOptions(vm: name)
+    case ("run", let name?): .runWithOptions(vm: name)
+    default: nil
     }
   }
 

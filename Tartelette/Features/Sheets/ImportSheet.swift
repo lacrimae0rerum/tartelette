@@ -1,19 +1,10 @@
 import SwiftUI
 import TarteletteKit
 
+/// `tart import`: the New VM sheet opened on its Import tab, so every way of creating a VM
+/// shares one consistent sheet.
 struct ImportSheet: View {
-  @Environment(\.dismiss) private var dismiss
-
   var body: some View {
-    VStack {
-      ContentUnavailableView("Import Virtual Machine", systemImage: "square.and.arrow.down")
-      HStack {
-        Spacer()
-        Button("Cancel", role: .cancel) { dismiss() }
-          .keyboardShortcut(.cancelAction)
-      }
-    }
-    .padding(20)
-    .frame(width: 480, height: 300)
+    NewVMSheet(initialTab: .importArchive)
   }
 }
