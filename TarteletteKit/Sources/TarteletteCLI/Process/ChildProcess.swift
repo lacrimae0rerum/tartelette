@@ -17,6 +17,10 @@ final class ChildProcess: @unchecked Sendable {
   private struct State {
     var stdoutOpen = true
     var stderrOpen = true
+    /// Set when a stream's EOF is claimed, before its close handler runs; the matching `…Open`
+    /// flag is cleared only after the handler returns.
+    var stdoutClosing = false
+    var stderrClosing = false
     var exitStatus: Int32?
     var completion: (@Sendable (Int32) -> Void)?
     var launched = false
@@ -137,18 +141,26 @@ final class ChildProcess: @unchecked Sendable {
     }
   }
 
+  /// Runs the stream's close handler once, then marks the stream closed.
+  ///
+  /// The stream only counts as closed after its handler returned: callers flush their final
+  /// partial line there, and completion (which requires both streams closed) must never
+  /// overtake that flush from the other stream's thread.
   private func closeStream(standardOutput: Bool) {
-    let shouldNotify = state.withLock { state -> Bool in
+    let claimed = state.withLock { state -> Bool in
       if standardOutput {
-        defer { state.stdoutOpen = false }
-        return state.stdoutOpen
+        guard !state.stdoutClosing else { return false }
+        state.stdoutClosing = true
       } else {
-        defer { state.stderrOpen = false }
-        return state.stderrOpen
+        guard !state.stderrClosing else { return false }
+        state.stderrClosing = true
       }
+      return true
     }
-    if shouldNotify {
-      if standardOutput { handlers.standardOutputClosed() } else { handlers.standardErrorClosed() }
+    guard claimed else { return }
+    if standardOutput { handlers.standardOutputClosed() } else { handlers.standardErrorClosed() }
+    state.withLock { state in
+      if standardOutput { state.stdoutOpen = false } else { state.stderrOpen = false }
     }
     finishIfComplete()
   }
@@ -158,11 +170,11 @@ final class ChildProcess: @unchecked Sendable {
     finishIfComplete()
     DispatchQueue.global().asyncAfter(deadline: .now() + Self.streamGracePeriod) { [self] in
       // A grandchild may hold the pipes open; stop waiting for EOF.
-      if state.withLock({ $0.stdoutOpen }) {
+      if state.withLock({ !$0.stdoutClosing }) {
         stdoutPipe.fileHandleForReading.readabilityHandler = nil
         closeStream(standardOutput: true)
       }
-      if state.withLock({ $0.stderrOpen }) {
+      if state.withLock({ !$0.stderrClosing }) {
         stderrPipe.fileHandleForReading.readabilityHandler = nil
         closeStream(standardOutput: false)
       }
