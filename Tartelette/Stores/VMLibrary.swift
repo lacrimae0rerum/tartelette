@@ -185,8 +185,9 @@ final class VMLibrary {
     start(name, options: options)
   }
 
-  /// Starts a VM with explicit options (the Run Options sheet). Applies the clipboard engine.
-  func start(_ name: String, options requested: RunOptions) {
+  /// Starts a VM with explicit options (the Run Options sheet). Applies the clipboard engine:
+  /// `clipboardEngine` overrides the saved profile's engine for this launch only.
+  func start(_ name: String, options requested: RunOptions, clipboardEngine: ClipboardEngine? = nil) {
     guard let client = context.client else { return }
     if isRunning(name) {
       showWindow(name)
@@ -205,7 +206,7 @@ final class VMLibrary {
 
     var options = requested
     options.name = name
-    let engine = profiles.profile(for: name).clipboardEngine.resolved(for: os)
+    let engine = (clipboardEngine ?? profiles.profile(for: name).clipboardEngine).resolved(for: os)
     if engine == .bridge || engine == .off { options.noClipboard = true }
 
     let logFile = logFile(for: name)
