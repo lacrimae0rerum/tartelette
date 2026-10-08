@@ -115,7 +115,7 @@ struct VMLogsTab: View {
       } else {
         EmptyStateView(
           "No Log Yet", systemImage: "doc.text.magnifyingglass",
-          message: model.library.isRunning(vmName) && model.library.launched[vmName] == nil
+          message: model.library.isRunning(vmName) && !model.library.wasStartedByTartelette(vmName)
             ? "This VM was started outside Tartelette, so its output goes elsewhere."
             : "Tart's output appears here when Tartelette starts this VM.")
       }

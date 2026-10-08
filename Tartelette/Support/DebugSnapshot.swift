@@ -13,7 +13,8 @@ import TarteletteKit
 /// Selections: `dashboard`, `images`, `registries`, `storage`, `activity`, `settings`,
 /// `vm:<name>` or `vm:<name>:<tab>` (a `VMDetailTab` raw value), `sheet:<newVM|pull|import|prune|login>`,
 /// `sheet:newVM:<image|macOS|linux|importArchive>`, `sheet:<clone|rename|push|export|delete|stop|run>:<name>`,
-/// `menubar` (opens the menu bar extra), `start:<vm>` (headless) / `stop:<vm>`, `close` (closes
+/// `menubar` (opens the menu bar extra), `start:<vm>` (headless), `launch:<vm>` (saved run profile),
+/// `stop:<vm>`, `close` (closes
 /// auxiliary windows).
 enum DebugSnapshot {
   static func scheduleIfRequested(model: AppModel) {
@@ -63,6 +64,9 @@ enum DebugSnapshot {
       showMenuBarContent(model: model)
     case "start" where parts.count == 2:
       model.library.start(parts[1]) { $0.display = .headless }
+    case "launch" where parts.count == 2:
+      // Starts with the VM's saved run profile (Tart's window by default).
+      model.library.start(parts[1])
     case "stop" where parts.count == 2:
       model.library.stop(parts[1])
     case "close":

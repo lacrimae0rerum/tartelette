@@ -75,7 +75,7 @@ struct VMHeaderView: View {
       if vm.state == .suspended { return "Suspended — starting resumes where it left off" }
       return nil
     }
-    if model.library.launched[vm.name] == nil {
+    if !model.library.wasStartedByTartelette(vm.name) {
       return "Started outside Tartelette"
     }
     if let options = model.library.launchedOptions[vm.name], options.display == .headless {

@@ -27,6 +27,8 @@ final class VMLibrary {
   private(set) var launched: [String: RunningVMProcess] = [:]
   /// The options each launched VM was started with.
   private(set) var launchedOptions: [String: RunOptions] = [:]
+  /// Running VMs that Tartelette started in an earlier session (matched through the run log).
+  private(set) var adoptedLaunches: Set<String> = []
   /// VNC URLs printed by `tart run --vnc*`.
   private(set) var vncURLs: [String: URL] = [:]
   /// Last resolved IP address per VM.
@@ -162,6 +164,12 @@ final class VMLibrary {
     if configs != newConfigs { configs = newConfigs }
     for change in changes where change.newState?.isRunning != true {
       vncURLs[change.name] = nil
+      adoptedLaunches.remove(change.name)
+    }
+    for change in changes where change.newState?.isRunning == true && launched[change.name] == nil {
+      if let pid = pid(of: change.name), Self.logRecordsLaunch(of: pid, in: logFile(for: change.name)) {
+        adoptedLaunches.insert(change.name)
+      }
     }
     if !changes.isEmpty {
       for observer in onChange { observer(changes) }
@@ -428,7 +436,28 @@ final class VMLibrary {
     }
   }
 
+  /// Whether a running VM was started by Tartelette — in this session or an earlier one.
+  func wasStartedByTartelette(_ name: String) -> Bool {
+    launched[name] != nil || adoptedLaunches.contains(name)
+  }
+
   // MARK: Log helpers
+
+  /// True when the run log's latest launch header was written when process `pid` started, i.e. the
+  /// VM was launched by Tartelette (possibly before the app was last quit).
+  nonisolated static func logRecordsLaunch(of pid: Int32, in file: URL) -> Bool {
+    var info = proc_bsdinfo()
+    let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+    guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size else { return false }
+    let started = Date(timeIntervalSince1970: TimeInterval(info.pbi_start_tvsec))
+    let header = logTail(file, lines: 400)
+      .split(whereSeparator: \.isNewline)
+      .last { $0.hasPrefix("=== ") }
+    guard let header, let end = header.range(of: " — ") else { return false }
+    let stamp = header[header.index(header.startIndex, offsetBy: 4)..<end.lowerBound]
+    guard let written = ISO8601DateFormatter().date(from: String(stamp)) else { return false }
+    return abs(written.timeIntervalSince(started)) < 15
+  }
 
   nonisolated static func logTail(_ file: URL, from offset: UInt64 = 0, lines: Int) -> String {
     guard let handle = try? FileHandle(forReadingFrom: file) else { return "" }

@@ -114,7 +114,7 @@ private struct CPUChartCard: View {
         valueFormatter: Formatting.cpu
       )
       .frame(height: 180)
-      Text("100% is one fully busy core. “Tart” covers the window, networking and I/O plumbing.")
+      Text("100% is one fully busy core. “Tart” is the VM window plus networking and disk plumbing.")
         .font(.caption)
         .foregroundStyle(.secondary)
     }
