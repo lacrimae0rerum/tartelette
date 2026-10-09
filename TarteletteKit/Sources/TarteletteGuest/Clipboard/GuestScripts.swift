@@ -273,7 +273,8 @@ public enum GuestScripts {
   }
 
   /// Replaces the guest pasteboard with a JSON payload `{"items":[{type,data}],"files":[path]}` read
-  /// from stdin, or from `payloadFile` (which is then deleted). Prints `{"changeCount": N}`.
+  /// from stdin, or from `payloadFile` (which is then deleted). Prints `{"changeCount": N,
+  /// "itemCount": M}`, where M is the number of items the pasteboard server holds afterwards.
   public static func macOSWrite(pasteboardName: String? = nil, payloadFile: String? = nil) -> [String] {
     jxa(
       jxaCommon + #"""
@@ -290,10 +291,23 @@ public enum GuestScripts {
             });
             writers.push(item);
           }
-          (payload.files || []).forEach(function (p) { writers.push($.NSURL.fileURLWithPath(expand(p))); });
+          (payload.files || []).forEach(function (p) {
+            // One eager item per file (NSURL writers promise later items lazily).
+            var fileItem = $.NSPasteboardItem.alloc.init;
+            fileItem.setStringForType($.NSURL.fileURLWithPath(expand(p)).absoluteString, 'public.file-url');
+            writers.push(fileItem);
+          });
           pb.clearContents;
           if (writers.length > 0) pb.writeObjects($(writers));
-          emit({ changeCount: Number(pb.changeCount) });
+          // writeObjects hands items to the pasteboard server asynchronously; osascript exits right
+          // after this, which would drop every item but the first. Reading each item back makes the
+          // server take them all before we report.
+          var written = pb.pasteboardItems, count = written.isNil() ? 0 : Number(written.count);
+          for (var i = 0; i < count; i++) {
+            var item = written.objectAtIndex(i), types = item.types;
+            for (var k = 0; k < types.count; k++) item.dataForType(types.objectAtIndex(k));
+          }
+          emit({ changeCount: Number(pb.changeCount), itemCount: count });
         }
         """#, [pasteboardName ?? "", payloadFile ?? ""])
   }

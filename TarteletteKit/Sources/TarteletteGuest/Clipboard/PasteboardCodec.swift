@@ -68,8 +68,24 @@ public enum PasteboardCodec {
       }
       writers.append(item)
     }
-    writers += payload.files.map { $0 as NSURL }
+    for file in payload.files {
+      // One item per file, as Finder writes them, with the URL set up front rather than promised:
+      // `NSURL` writers hand later items to the pasteboard server on demand, so the content
+      // other apps (and our own polling) see would keep changing after the write.
+      let item = NSPasteboardItem()
+      item.setString(file.absoluteString, forType: .fileURL)
+      writers.append(item)
+    }
     if !writers.isEmpty { pasteboard.writeObjects(writers) }
+    settle(pasteboard)
     return pasteboard.changeCount
+  }
+
+  /// Makes the pasteboard server take every item now by reading each flavour back, so the written
+  /// content is complete and stable as soon as `write` returns.
+  static func settle(_ pasteboard: NSPasteboard) {
+    for item in pasteboard.pasteboardItems ?? [] {
+      for type in item.types { _ = item.data(forType: type) }
+    }
   }
 }

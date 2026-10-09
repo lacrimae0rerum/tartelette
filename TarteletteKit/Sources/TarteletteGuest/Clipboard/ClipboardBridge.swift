@@ -305,15 +305,28 @@ public actor ClipboardBridge {
       }
       command = GuestScripts.macOSWrite(pasteboardName: options.guestPasteboardName, payloadFile: path)
     }
-    let output: CommandOutput
-    do {
-      output = try await checked(
-        endpoint, command, input: input, operation: "set the guest clipboard", timeout: timeout(for: body.count))
-    } catch {
-      if let staged { await removeGuest([staged], endpoint) }
-      throw error
+    // One item for all flavours plus one per file; anything less means the guest dropped some.
+    let expectedItems = (payload.items.isEmpty ? 0 : 1) + guestFiles.count
+    var reply: MacOSWriteReply?
+    for _ in 0..<2 {
+      let output: CommandOutput
+      do {
+        output = try await checked(
+          endpoint, command, input: input, operation: "set the guest clipboard", timeout: timeout(for: body.count))
+      } catch {
+        if let staged { await removeGuest([staged], endpoint) }
+        throw error
+      }
+      let decoded = try decode(MacOSWriteReply.self, from: output.stdout)
+      reply = decoded
+      // Older scripts don't report the count; trust them as before.
+      if (decoded.itemCount ?? expectedItems) >= expectedItems || staged != nil { break }
     }
-    let reply = try decode(ChangeCountReply.self, from: output.stdout)
+    guard let reply else { throw GuestTransportError.unexpectedOutput("The guest didn't confirm the clipboard write.") }
+    if let count = reply.itemCount, count < expectedItems {
+      throw GuestTransportError.unexpectedOutput(
+        "The guest clipboard kept \(count) of \(expectedItems) items after the copy.")
+    }
     return GuestClipboardState(changeCount: reply.changeCount, fingerprint: payload.fingerprint)
   }
 
@@ -574,6 +587,13 @@ public actor ClipboardBridge {
 
 struct ChangeCountReply: Decodable {
   var changeCount: Int
+}
+
+/// Reply of `GuestScripts.macOSWrite`: the new change count and how many items the pasteboard
+/// server actually holds after the write.
+struct MacOSWriteReply: Decodable {
+  var changeCount: Int
+  var itemCount: Int?
 }
 
 struct MacOSWritePayload: Encodable {
