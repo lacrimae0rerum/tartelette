@@ -61,4 +61,23 @@ struct ProcessInspectorTests {
 
     #expect(ProcessInspector.childPIDs(of: getpid()).contains(sleeper.processIdentifier))
   }
+
+  @Test func startTimeIdentifiesAProcessInstance() throws {
+    let own = try #require(ProcessInspector.startTime(of: getpid()))
+    #expect(ProcessInspector.startTime(of: getpid()) == own)
+    let now = UInt64(Date().timeIntervalSince1970 * 1_000_000)
+    #expect(own <= now)
+
+    let sleeper = Process()
+    sleeper.executableURL = URL(fileURLWithPath: "/bin/sleep")
+    sleeper.arguments = ["5"]
+    try sleeper.run()
+    defer {
+      sleeper.terminate()
+      sleeper.waitUntilExit()
+    }
+    let child = try #require(ProcessInspector.startTime(of: sleeper.processIdentifier))
+    #expect(child >= own)
+    #expect(ProcessInspector.startTime(of: -1) == nil)
+  }
 }

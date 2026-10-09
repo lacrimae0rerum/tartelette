@@ -32,8 +32,8 @@ public enum TartOutputParsing {
       return VMListing(
         name: name,
         source: sourceValue == "oci" ? .oci : .local,
-        diskGB: number(row["Disk"]),
-        sizeGB: number(row["Size"]),
+        diskGB: finiteNumber(row["Disk"]),
+        sizeGB: finiteNumber(row["Size"]),
         lastAccessed: (row["Accessed"] as? String).flatMap { dateParser.date(from: $0) },
         state: state
       )
@@ -52,14 +52,29 @@ public enum TartOutputParsing {
       }
     return VMDetails(
       os: VMOperatingSystem(tartValue: object["OS"] as? String ?? ""),
-      cpuCount: Int(number(object["CPU"]) ?? 0),
-      memoryMB: UInt64(max(0, number(object["Memory"]) ?? 0)),
-      diskGB: number(object["Disk"]),
+      cpuCount: try integer(object["CPU"], field: "CPU"),
+      memoryMB: try integer(object["Memory"], field: "Memory"),
+      diskGB: finiteNumber(object["Disk"]),
       diskFormat: object["DiskFormat"] as? String ?? DiskFormat.raw.rawValue,
-      sizeGB: number(object["Size"]),
+      sizeGB: finiteNumber(object["Size"]),
       display: object["Display"] as? String ?? "",
       state: state
     )
+  }
+
+  /// A whole number field (missing → 0). Non-finite, negative-for-unsigned or out-of-range values
+  /// throw instead of trapping in the integer conversion.
+  private static func integer<Value: FixedWidthInteger>(_ raw: Any?, field: String) throws -> Value {
+    guard let value = number(raw) else { return 0 }
+    guard value.isFinite, let converted = Value(exactly: value.rounded(.towardZero)) else {
+      throw TartOutputError.malformed("`\(field)` isn't a valid count: \(raw.map { "\($0)" } ?? "nil")")
+    }
+    return converted
+  }
+
+  /// An optional measurement; non-finite values are treated as unknown.
+  private static func finiteNumber(_ raw: Any?) -> Double? {
+    number(raw).flatMap { $0.isFinite ? $0 : nil }
   }
 
   public static func parseConfig(_ data: Data) throws -> VMConfigFile {

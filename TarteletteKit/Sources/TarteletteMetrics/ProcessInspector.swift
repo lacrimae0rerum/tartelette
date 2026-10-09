@@ -136,6 +136,16 @@ public struct ProcessInspector: Sendable {
     return kill(pid, 0) == 0 || errno == EPERM
   }
 
+  /// When `pid` started, in microseconds since 1970 (`proc_bsdinfo.pbi_start_*`), or nil if the
+  /// process is gone. Together with the pid it identifies one process instance.
+  public static func startTime(of pid: Int32) -> UInt64? {
+    guard pid > 0 else { return nil }
+    var info = proc_bsdinfo()
+    let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+    guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size else { return nil }
+    return info.pbi_start_tvsec &* 1_000_000 &+ info.pbi_start_tvusec
+  }
+
   private static func cpuNanoseconds(user: UInt64, system: UInt64) -> UInt64 {
     let (sum, overflow) = user.addingReportingOverflow(system)
     return nanoseconds(

@@ -17,21 +17,14 @@ struct VMLockTests {
     try Data("{}".utf8).write(to: file)
     defer { try? FileManager.default.removeItem(at: file) }
 
-    // A child process takes an fcntl write lock (as `tart run` does) and holds it briefly.
-    let holder = Process()
-    holder.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
-    holder.arguments = [
-      "-c",
-      "import fcntl,sys,time; f=open(sys.argv[1],'r+'); fcntl.lockf(f, fcntl.LOCK_EX); print('locked', flush=True); time.sleep(5)",
-      file.path,
-    ]
-    let output = Pipe()
-    holder.standardOutput = output
-    try holder.run()
-    defer { holder.terminate() }
-    _ = output.fileHandleForReading.availableData  // wait for "locked"
+    // A child process takes an fcntl write lock (as `tart run` does) and holds it.
+    let holder = try FcntlLockHolder(file: file)
+    defer { holder.stop() }
 
-    #expect(VMLock.holderPID(configFile: file) == holder.processIdentifier)
+    #expect(VMLock.holderPID(configFile: file) == holder.pid)
+
+    holder.stop()
+    #expect(VMLock.holderPID(configFile: file) == nil)
   }
 
   @Test func resolvesTartHome() {

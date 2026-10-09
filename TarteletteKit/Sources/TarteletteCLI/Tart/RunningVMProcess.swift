@@ -10,6 +10,9 @@ public final class RunningVMProcess: Sendable {
     var exitCode: Int32?
     var waiters: [CheckedContinuation<Int32, Never>] = []
     var source: (any DispatchSourceProcess)?
+    /// One thread at a time calls `waitpid`; others only ask it to look again.
+    var reaping = false
+    var reapRequested = false
   }
 
   /// Keeps launched processes (and their exit sources) alive until they have been reaped.
@@ -120,22 +123,53 @@ public final class RunningVMProcess: Sendable {
     reap()
   }
 
-  private func reap() {
-    var status: Int32 = 0
-    var result: pid_t
-    repeat {
-      result = waitpid(pid, &status, WNOHANG)
-    } while result == -1 && errno == EINTR
-
-    let code: Int32
-    if result == pid {
-      code = Self.decodeWaitStatus(status)
-    } else if result == -1 {
-      code = -1  // Already reaped elsewhere; the exit code is unknown.
-    } else {
-      return  // Still running.
+  /// Reaps the child if it has exited.
+  ///
+  /// Called from the exit source and once right after it is activated, possibly concurrently.
+  /// Reaping is single-flight: only the thread holding the claim calls `waitpid`, so a second
+  /// caller can't get ECHILD and record -1 over the real exit code. A caller that finds the claim
+  /// taken asks the holder to check again, so an exit is never missed.
+  func reap() {
+    let claimed = state.withLock { state -> Bool in
+      guard state.exitCode == nil else { return false }
+      if state.reaping {
+        state.reapRequested = true
+        return false
+      }
+      state.reaping = true
+      return true
     }
+    guard claimed else { return }
 
+    while true {
+      var status: Int32 = 0
+      var result: pid_t
+      repeat {
+        result = waitpid(pid, &status, WNOHANG)
+      } while result == -1 && errno == EINTR
+
+      if result == pid {
+        finish(Self.decodeWaitStatus(status))
+        return
+      }
+      if result == -1 {
+        finish(-1)  // Reaped by someone outside this object; the exit code is unknown.
+        return
+      }
+      // Still running: release the claim unless another caller asked for a re-check meanwhile.
+      let again = state.withLock { state -> Bool in
+        if state.reapRequested {
+          state.reapRequested = false
+          return true
+        }
+        state.reaping = false
+        return false
+      }
+      guard again else { return }
+    }
+  }
+
+  private func finish(_ code: Int32) {
     let (waiters, source) = state.withLock { state -> ([CheckedContinuation<Int32, Never>], (any DispatchSourceProcess)?) in
       guard state.exitCode == nil else { return ([], nil) }
       state.exitCode = code

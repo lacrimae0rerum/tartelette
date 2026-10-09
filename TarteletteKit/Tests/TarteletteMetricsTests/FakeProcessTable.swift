@@ -11,6 +11,8 @@ final class FakeProcessTable: ProcessTable {
     var openFiles: [String] = []
     var children: [Int32] = []
     var usages: [ProcessUsage] = []
+    /// Process start time (µs since 1970); a different value models a reused pid.
+    var startTime: UInt64? = nil
   }
 
   private let state: OSAllocatedUnfairLock<[Int32: Entry]>
@@ -33,8 +35,15 @@ final class FakeProcessTable: ProcessTable {
     }
   }
 
+  func startTime(of pid: Int32) -> UInt64? { state.withLock { $0[pid]?.startTime } }
+
   func remove(_ pid: Int32) {
     state.withLock { _ = $0.removeValue(forKey: pid) }
+  }
+
+  /// Replaces whatever runs as `pid` (models the kernel reusing a pid for a new process).
+  func replace(_ pid: Int32, with entry: Entry) {
+    state.withLock { $0[pid] = entry }
   }
 }
 

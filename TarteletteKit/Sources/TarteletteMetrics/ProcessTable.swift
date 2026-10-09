@@ -9,10 +9,14 @@ public protocol ProcessTable: Sendable {
   func childPIDs(of pid: Int32) -> [Int32]
   func usage(of pid: Int32) -> ProcessUsage?
   func isAlive(_ pid: Int32) -> Bool
+  /// When the process started (µs since 1970). Distinguishes a reused pid from the original
+  /// process; nil when unknown.
+  func startTime(of pid: Int32) -> UInt64?
 }
 
 extension ProcessTable {
   public func isAlive(_ pid: Int32) -> Bool { executablePath(of: pid) != nil }
+  public func startTime(of pid: Int32) -> UInt64? { nil }
 }
 
 /// The live process table backed by libproc.
@@ -25,4 +29,5 @@ public struct SystemProcessTable: ProcessTable {
   public func childPIDs(of pid: Int32) -> [Int32] { ProcessInspector.childPIDs(of: pid) }
   public func usage(of pid: Int32) -> ProcessUsage? { ProcessInspector.usage(of: pid) }
   public func isAlive(_ pid: Int32) -> Bool { ProcessInspector.isAlive(pid) }
+  public func startTime(of pid: Int32) -> UInt64? { ProcessInspector.startTime(of: pid) }
 }

@@ -20,6 +20,8 @@ public final class VMProcessResolver: Sendable {
   private struct CacheEntry: Sendable {
     var tartPID: Int32
     var virtualMachinePIDs: [Int32]
+    /// Start time of each cached XPC process, so a pid the kernel reused isn't trusted.
+    var startTimes: [Int32: UInt64]
   }
 
   private let paths: TartPaths
@@ -48,14 +50,27 @@ public final class VMProcessResolver: Sendable {
 
     if let cached = cache.withLock({ $0[name] }), cached.tartPID == tartPID,
       !cached.virtualMachinePIDs.isEmpty,
-      cached.virtualMachinePIDs.allSatisfy({ table.isAlive($0) })
+      cached.virtualMachinePIDs.allSatisfy({ isStillSameService($0, startTime: cached.startTimes[$0]) })
     {
       return VMProcessSet(tartPID: tartPID, virtualMachinePIDs: cached.virtualMachinePIDs)
     }
 
     let virtualMachinePIDs = scanVirtualMachinePIDs(forVM: name)
-    cache.withLock { $0[name] = CacheEntry(tartPID: tartPID, virtualMachinePIDs: virtualMachinePIDs) }
+    var startTimes: [Int32: UInt64] = [:]
+    for pid in virtualMachinePIDs { startTimes[pid] = table.startTime(of: pid) }
+    let entry = CacheEntry(tartPID: tartPID, virtualMachinePIDs: virtualMachinePIDs, startTimes: startTimes)
+    cache.withLock { $0[name] = entry }
     return VMProcessSet(tartPID: tartPID, virtualMachinePIDs: virtualMachinePIDs)
+  }
+
+  /// A cached attribution stays valid only while the pid is alive, still runs the Virtualization
+  /// XPC service and — when known — has the same start time (the kernel reuses pids).
+  private func isStillSameService(_ pid: Int32, startTime cachedStart: UInt64?) -> Bool {
+    guard table.isAlive(pid), let path = table.executablePath(of: pid),
+      (path as NSString).lastPathComponent == Self.virtualMachineServiceName
+    else { return false }
+    guard let cachedStart else { return true }
+    return table.startTime(of: pid) == cachedStart
   }
 
   /// Drops cached attributions so the next lookup re-scans the process table.

@@ -4,6 +4,10 @@ import Foundation
 ///
 /// Completion fires exactly once, after the process has exited and both output streams reached
 /// EOF (or a short grace period elapsed, in case a grandchild keeps a pipe open).
+///
+/// Per stream, data delivery and the close handler are serialized: a chunk whose delivery has
+/// started always lands before the close handler, and output that arrives after a stream was
+/// closed by the grace period is dropped.
 final class ChildProcess: @unchecked Sendable {
   struct Handlers: Sendable {
     var standardOutput: @Sendable (Data) -> Void
@@ -36,6 +40,9 @@ final class ChildProcess: @unchecked Sendable {
   private let standardInput: Data?
   private let handlers: Handlers
   private let state = Locked(State())
+  /// Serialize each stream's deliveries with its close (see the type's documentation).
+  private let stdoutGate = NSLock()
+  private let stderrGate = NSLock()
 
   init(
     executable: URL,
@@ -72,7 +79,7 @@ final class ChildProcess: @unchecked Sendable {
         handle.readabilityHandler = nil
         self.closeStream(standardOutput: true)
       } else {
-        self.handlers.standardOutput(data)
+        self.deliver(data, standardOutput: true)
       }
     }
     stderrPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
@@ -82,7 +89,7 @@ final class ChildProcess: @unchecked Sendable {
         handle.readabilityHandler = nil
         self.closeStream(standardOutput: false)
       } else {
-        self.handlers.standardError(data)
+        self.deliver(data, standardOutput: false)
       }
     }
     process.terminationHandler = { [weak self] process in
@@ -147,6 +154,9 @@ final class ChildProcess: @unchecked Sendable {
   /// partial line there, and completion (which requires both streams closed) must never
   /// overtake that flush from the other stream's thread.
   private func closeStream(standardOutput: Bool) {
+    let gate = standardOutput ? stdoutGate : stderrGate
+    // Waits for an in-flight delivery of this stream to finish before closing it.
+    gate.lock()
     let claimed = state.withLock { state -> Bool in
       if standardOutput {
         guard !state.stdoutClosing else { return false }
@@ -157,12 +167,25 @@ final class ChildProcess: @unchecked Sendable {
       }
       return true
     }
+    if claimed {
+      if standardOutput { handlers.standardOutputClosed() } else { handlers.standardErrorClosed() }
+    }
+    gate.unlock()
     guard claimed else { return }
-    if standardOutput { handlers.standardOutputClosed() } else { handlers.standardErrorClosed() }
     state.withLock { state in
       if standardOutput { state.stdoutOpen = false } else { state.stderrOpen = false }
     }
     finishIfComplete()
+  }
+
+  /// Hands a chunk to the stream's handler unless the stream was already closed.
+  private func deliver(_ data: Data, standardOutput: Bool) {
+    let gate = standardOutput ? stdoutGate : stderrGate
+    gate.lock()
+    defer { gate.unlock() }
+    let closing = state.withLock { standardOutput ? $0.stdoutClosing : $0.stderrClosing }
+    guard !closing else { return }
+    if standardOutput { handlers.standardOutput(data) } else { handlers.standardError(data) }
   }
 
   private func markExited(_ status: Int32) {

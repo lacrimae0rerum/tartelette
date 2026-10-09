@@ -60,4 +60,48 @@ struct ChildProcessTests {
       #expect(Set(recorder.snapshot) == ["stdout-closed", "stderr-closed", "completed"])
     }
   }
+
+  /// A grandchild keeps the pipes open, so the streams are closed by the grace period while a data
+  /// delivery is still in flight. That delivery must land before the close handler, and nothing may
+  /// be delivered after it (the grandchild's later output is dropped deterministically).
+  @Test func graceCloseWaitsForInFlightDeliveryAndDropsLaterOutput() async throws {
+    let recorder = Recorder()
+    let child = ChildProcess(
+      executable: URL(fileURLWithPath: "/bin/sh"),
+      arguments: ["-c", "(sleep 4; echo late) & echo early"],
+      environment: ProcessInfo.processInfo.environment,
+      standardInput: nil,
+      handlers: .init(
+        standardOutput: { data in
+          let text = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+          // Still being delivered when the 2 s grace period closes the stream.
+          if text.contains("early") { Thread.sleep(forTimeInterval: 2.6) }
+          recorder.record("data:\(text)")
+        },
+        standardError: { _ in },
+        standardOutputClosed: { recorder.record("stdout-closed") },
+        standardErrorClosed: { recorder.record("stderr-closed") }
+      )
+    )
+    let status: Int32 = await withCheckedContinuation { continuation in
+      do {
+        try child.start { status in
+          recorder.record("completed")
+          continuation.resume(returning: status)
+        }
+      } catch {
+        continuation.resume(returning: -1)
+      }
+    }
+    // Give the grandchild time to write its late line (at about 4 s).
+    try await Task.sleep(for: .seconds(3))
+
+    let events = recorder.snapshot
+    #expect(status == 0)
+    #expect(events.filter { $0 == "completed" }.count == 1)
+    let early = try #require(events.firstIndex(of: "data:early"), "events: \(events)")
+    let closed = try #require(events.firstIndex(of: "stdout-closed"), "events: \(events)")
+    #expect(early < closed, "events: \(events)")
+    #expect(!events[closed...].contains { $0.hasPrefix("data:") }, "events: \(events)")
+  }
 }

@@ -14,6 +14,8 @@ public actor VMMetricsSampler {
   private let resolver: VMProcessResolver
   private let table: any ProcessTable
   private var previous: [Int32: ProcessUsage] = [:]
+  /// Start time of each sampled pid, so a reused pid never yields a delta against another process.
+  private var previousStartTimes: [Int32: UInt64] = [:]
 
   public init(paths: TartPaths, table: some ProcessTable = SystemProcessTable()) {
     self.init(resolver: VMProcessResolver(paths: paths, table: table), table: table)
@@ -27,6 +29,15 @@ public actor VMMetricsSampler {
   public func sample(vms names: [String], at date: Date = .now) -> [String: VMResourceSample] {
     var results: [String: VMResourceSample] = [:]
     var current: [Int32: ProcessUsage] = [:]
+    var currentStartTimes: [Int32: UInt64] = [:]
+
+    /// The previous snapshot of `pid`, unless the pid now belongs to a different process.
+    func baseline(_ pid: Int32) -> ProcessUsage? {
+      let start = table.startTime(of: pid)
+      if let start { currentStartTimes[pid] = start }
+      if let start, let before = previousStartTimes[pid], before != start { return nil }
+      return previous[pid]
+    }
 
     for name in names {
       guard let set = resolver.processes(forVM: name) else { continue }
@@ -38,10 +49,10 @@ public actor VMMetricsSampler {
       var tart = RateAccumulator()
       // Each pid is read once per call, even if it were listed twice.
       for pid in set.virtualMachinePIDs where current[pid] == nil {
-        guest.add(table.usage(of: pid), previous: previous[pid], recordingInto: &current)
+        guest.add(table.usage(of: pid), previous: baseline(pid), recordingInto: &current)
       }
       for pid in [set.tartPID] + softnetPIDs where current[pid] == nil {
-        tart.add(table.usage(of: pid), previous: previous[pid], recordingInto: &current)
+        tart.add(table.usage(of: pid), previous: baseline(pid), recordingInto: &current)
       }
 
       guard guest.hasRates || tart.hasRates else { continue }
@@ -58,6 +69,7 @@ public actor VMMetricsSampler {
     }
 
     previous = current
+    previousStartTimes = currentStartTimes
     return results
   }
 
@@ -69,6 +81,7 @@ public actor VMMetricsSampler {
   /// Forgets all snapshots and cached attributions.
   public func reset() {
     previous.removeAll()
+    previousStartTimes.removeAll()
     resolver.invalidate()
   }
 }

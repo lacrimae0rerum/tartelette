@@ -247,11 +247,31 @@ public struct RunOptions: Sendable, Hashable, Codable {
 
     public var isEmpty: Bool { argument.isEmpty }
 
+    /// Tart splits `--provisioning-opts` on "," and then on the first "=" of each pair, with no
+    /// escaping: a value may contain "=" but never ",".
+    private static func isRepresentable(_ value: String) -> Bool { !value.contains(",") }
+
+    /// A user-facing explanation when a value can't be passed to Tart, or nil when all are valid.
+    public var problem: String? {
+      let fields = [("Full name", fullName), ("Username", username), ("Password", password)]
+      let invalid = fields.compactMap { label, value in
+        value.map { !$0.isEmpty && !Self.isRepresentable($0) } == true ? label : nil
+      }
+      guard !invalid.isEmpty else { return nil }
+      return "\(ListFormatter.localizedString(byJoining: invalid)) can't contain commas: Tart separates provisioning options with commas."
+    }
+
+    /// The `--provisioning-opts` value. Values Tart couldn't parse (see `problem`) are left out
+    /// rather than emitted as a corrupted option list.
     public var argument: String {
       var pairs: [String] = []
-      if let fullName, !fullName.isEmpty { pairs.append("fullName=\(fullName)") }
-      if let username, !username.isEmpty { pairs.append("username=\(username)") }
-      if let password, !password.isEmpty { pairs.append("password=\(password)") }
+      func add(_ key: String, _ value: String?) {
+        guard let value, !value.isEmpty, Self.isRepresentable(value) else { return }
+        pairs.append("\(key)=\(value)")
+      }
+      add("fullName", fullName)
+      add("username", username)
+      add("password", password)
       if let logsInAutomatically { pairs.append("logsInAutomatically=\(logsInAutomatically)") }
       if let enablesRemoteLogin { pairs.append("enablesRemoteLogin=\(enablesRemoteLogin)") }
       return pairs.joined(separator: ",")

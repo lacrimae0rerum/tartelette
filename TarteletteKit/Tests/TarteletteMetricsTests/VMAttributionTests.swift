@@ -11,18 +11,8 @@ struct VMAttributionTests {
     defer { home.remove() }
 
     // A real child process holds the fcntl lock on config.json, like `tart run`.
-    let holder = Process()
-    holder.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
-    holder.arguments = [
-      "-c",
-      "import fcntl,sys,time; f=open(sys.argv[1],'r+'); fcntl.lockf(f, fcntl.LOCK_EX); print('locked', flush=True); time.sleep(10)",
-      home.paths.configFile("demo").path,
-    ]
-    let output = Pipe()
-    holder.standardOutput = output
-    try holder.run()
-    defer { holder.terminate() }
-    _ = output.fileHandleForReading.availableData
+    let holder = try FcntlLockHolder(file: home.paths.configFile("demo"))
+    defer { holder.stop() }
 
     let table = FakeProcessTable([
       // Uses the unresolved /var/... temp path; the kernel would report /private/var/....
@@ -36,9 +26,9 @@ struct VMAttributionTests {
     let resolver = VMProcessResolver(paths: home.paths, table: table)
 
     let set = try #require(resolver.processes(forVM: "demo"))
-    #expect(set.tartPID == holder.processIdentifier)
+    #expect(set.tartPID == holder.pid)
     #expect(set.virtualMachinePIDs == [9001])
-    #expect(set.allPIDs == [holder.processIdentifier, 9001])
+    #expect(set.allPIDs == [holder.pid, 9001])
 
     // Stopped VM: nobody holds the lock.
     #expect(resolver.processes(forVM: "demo2") == nil)
