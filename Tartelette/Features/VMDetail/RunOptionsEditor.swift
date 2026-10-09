@@ -70,9 +70,15 @@ enum RunOptionsValidation {
       }
     }
     if options.rosettaTag?.isEmpty == false, os == .macOS { error("Rosetta sharing is for Linux VMs.") }
-    if options.provisioning?.isEmpty == false {
-      if os != .macOS { error("Provisioning is for macOS VMs.") }
-      if !HostSupport.atLeast(27) { error("Provisioning needs macOS 27 or later on this Mac.") }
+    if let provisioning = options.provisioning {
+      // Checked first and independently of `isEmpty`: values Tart can't represent are left out of
+      // the argument, so a profile whose only values are invalid would look empty and launch
+      // without the account the user typed.
+      if let problem = provisioning.problem { error(problem) }
+      if !provisioning.isEmpty {
+        if os != .macOS { error("Provisioning is for macOS VMs.") }
+        if !HostSupport.atLeast(27) { error("Provisioning needs macOS 27 or later on this Mac.") }
+      }
     }
     if options.serial, options.serialPath?.isEmpty == false {
       warning("A serial device path is ignored while “Open a serial console” is on.")
@@ -922,6 +928,9 @@ private struct ProvisioningOptionsSection: View {
           isOn: Binding(
             get: { provisioning.enablesRemoteLogin ?? false },
             set: { options.provisioning?.enablesRemoteLogin = $0 }))
+        if let problem = provisioning.problem {
+          InlineNotice(.error, problem)
+        }
       }
     } header: {
       Text("First Boot")

@@ -26,7 +26,9 @@ struct VMClipboardTab: View {
           HostClipboardPreview()
         }
         SectionCard("Last Received from the VM", systemImage: "arrow.down.doc") {
-          ClipboardPreview(payload: state.lastReceived, emptyTitle: "Nothing received yet")
+          ClipboardPreview(
+            payload: state.lastReceived,
+            emptyTitle: state.lastReceivedSummary.map { "Received \($0)" } ?? "Nothing received yet")
         }
       }
 

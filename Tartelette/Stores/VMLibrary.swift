@@ -37,6 +37,8 @@ final class VMLibrary {
   private(set) var hasLoaded = false
   private(set) var lastError: String?
   private(set) var lastRefresh: Date?
+  /// Number of listing attempts applied so far (successful or not); see `refreshAndWait()`.
+  private(set) var listGeneration = 0
 
   /// Observers notified after each refresh that changed something (ClipboardCenter, MetricsCenter,
   /// Dock badge).
@@ -120,6 +122,7 @@ final class VMLibrary {
     guard let client = context.client else {
       applyListing([], configs: [:])
       hasLoaded = true
+      listGeneration += 1
       return
     }
     guard !isRefreshing else {
@@ -143,7 +146,24 @@ final class VMLibrary {
       }
       hasLoaded = true
       lastRefresh = .now
+      listGeneration += 1
     } while refreshPending
+  }
+
+  /// Refreshes and returns only after a listing that started after this call has been applied.
+  ///
+  /// `refresh()` returns at once when another refresh is in flight; callers that must act on the
+  /// current environment (for example after TART_HOME changed) need a listing that started later.
+  func refreshAndWait() async {
+    // A refresh in flight may already be past its listing call: wait for one more after it.
+    let target = listGeneration + (isRefreshing ? 2 : 1)
+    while listGeneration < target, !Task.isCancelled {
+      if isRefreshing {
+        try? await Task.sleep(for: .milliseconds(50))
+      } else {
+        await refresh()
+      }
+    }
   }
 
   private func applyListing(_ listing: [VMListing], configs newConfigs: [String: VMConfigFile]) {

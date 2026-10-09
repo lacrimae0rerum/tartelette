@@ -241,7 +241,12 @@ enum PruneEstimate {
       var remaining = overflow ? UInt64.max : budget
       let newestFirst = entries
         .filter { removed[$0.name] == nil }
-        .sorted { ($0.accessed ?? .distantPast) > ($1.accessed ?? .distantPast) }
+        .sorted { lhs, rhs in
+          // Newest first; equal (or missing) dates fall back to the name, so the estimate doesn't
+          // depend on input order.
+          let left = lhs.accessed ?? .distantPast, right = rhs.accessed ?? .distantPast
+          return left == right ? lhs.name < rhs.name : left > right
+        }
       for entry in newestFirst {
         if entry.bytes <= remaining {
           remaining -= entry.bytes

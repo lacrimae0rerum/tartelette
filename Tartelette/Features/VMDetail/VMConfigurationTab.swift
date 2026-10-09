@@ -15,6 +15,8 @@ struct VMConfigurationTab: View {
   @State private var isApplying = false
   @State private var errorMessage: String?
   @State private var confirmation: String?
+  /// Identifies the banner on screen, so an older banner's timer never hides a newer one.
+  @State private var confirmationToken = UUID()
 
   var body: some View {
     let current = ConfigurationDraft(config: model.library.config(of: vm.name), listing: vm)
@@ -137,10 +139,12 @@ struct VMConfigurationTab: View {
   }
 
   private func showConfirmation(_ message: String) {
+    let token = UUID()
+    confirmationToken = token
     withAnimation { confirmation = message }
     Task {
       try? await Task.sleep(for: .seconds(4))
-      if confirmation == message { withAnimation { confirmation = nil } }
+      if confirmationToken == token { withAnimation { confirmation = nil } }
     }
   }
 }

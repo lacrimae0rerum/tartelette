@@ -10,7 +10,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   func applicationDidFinishLaunching(_ notification: Notification) {
     // Two copies (say, one in /Applications and a development build) would both poll the VMs and
     // run live clipboard sync against the same guests, overwriting each other's transfers.
-    if let other = Self.otherRunningInstance() {
+    if let other = Self.instanceToDeferTo() {
       other.activate()
       NSApp.terminate(nil)
       return
@@ -23,15 +23,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     #endif
   }
 
-  /// Another running copy of this app (same bundle identifier, any location), if any.
-  static func otherRunningInstance() -> NSRunningApplication? {
+  /// The copy of this app (same bundle identifier, any location) that this one should give way
+  /// to, or nil when this copy is the one that keeps running.
+  static func instanceToDeferTo() -> NSRunningApplication? {
     // XCTest launches the app as its test host next to any copy already running.
     guard ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil,
       let identifier = Bundle.main.bundleIdentifier
     else { return nil }
     let current = NSRunningApplication.current
-    return NSRunningApplication.runningApplications(withBundleIdentifier: identifier)
-      .first { $0.processIdentifier != current.processIdentifier && !$0.isTerminated }
+    var running = NSRunningApplication.runningApplications(withBundleIdentifier: identifier).filter { !$0.isTerminated }
+    if !running.contains(where: { $0.processIdentifier == current.processIdentifier }) { running.append(current) }
+    let instances = running.map { InstanceInfo(pid: $0.processIdentifier, launchDate: $0.launchDate) }
+    guard let survivor = survivingInstance(among: instances), survivor.pid != current.processIdentifier else { return nil }
+    return running.first { $0.processIdentifier == survivor.pid }
+  }
+
+  /// One running copy of the app, as the single-instance check sees it.
+  struct InstanceInfo: Equatable {
+    var pid: Int32
+    var launchDate: Date?
+  }
+
+  /// The copy that keeps running: the earliest launched (copies without a launch date count as
+  /// launched last), then the lowest PID. Every copy computes the same survivor, so two copies
+  /// started at the same moment never both quit.
+  static func survivingInstance(among instances: [InstanceInfo]) -> InstanceInfo? {
+    instances.min { lhs, rhs in
+      switch (lhs.launchDate, rhs.launchDate) {
+      case let (left?, right?) where left != right: left < right
+      case (.some, nil): true
+      case (nil, .some): false
+      default: lhs.pid < rhs.pid
+      }
+    }
   }
 
   func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -39,6 +63,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   }
 
   func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+    // A duplicate that gave way to another copy never started anything, and must not act on VMs.
+    guard model.started else { return .terminateNow }
     if model.settings.stopVMsOnQuit { model.requestShutdownOfLaunchedVMs() }
     model.clipboard.stopAll()
     return .terminateNow

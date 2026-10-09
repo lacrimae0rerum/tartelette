@@ -90,6 +90,18 @@ struct SheetLogicTests {
     #expect(PruneEstimate.bytes(listedGB: .infinity) == 0)
   }
 
+  @Test func budgetWalkIsDeterministicForEqualAndMissingDates() {
+    // Same date (and no date) for every entry: only the name may decide the order.
+    let entries = [
+      entry("c", gib: 2, daysAgo: 3), entry("a", gib: 2, daysAgo: 3), entry("b", gib: 2, daysAgo: 3),
+      entry("z", gib: 2, daysAgo: nil), entry("y", gib: 2, daysAgo: nil),
+    ]
+    let forward = PruneEstimate.affected(entries, olderThanDays: nil, spaceBudgetGiB: 4, now: now).map(\.name)
+    let backward = PruneEstimate.affected(entries.reversed(), olderThanDays: nil, spaceBudgetGiB: 4, now: now).map(\.name)
+    #expect(forward == backward)
+    #expect(Set(forward) == ["c", "y", "z"], "a and b (by name) fit the 4 GiB budget among the newest")
+  }
+
   @Test func ageCriterionUsesAccessDates() {
     let entries = [entry("new", gib: 1, daysAgo: 1), entry("old", gib: 1, daysAgo: 40), entry("never", gib: 1, daysAgo: nil)]
     let removed = PruneEstimate.affected(entries, olderThanDays: 30, spaceBudgetGiB: nil, now: now).map(\.name)

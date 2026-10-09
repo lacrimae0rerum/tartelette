@@ -40,6 +40,22 @@ struct RunOptionsValidationTests {
     return RunOptionsValidation.issues(for: RunProfile(options: options), os: os, softnet: softnet)
   }
 
+  @Test func provisioningValuesWithCommasBlockSaving() {
+    let found = issues { $0.provisioning = .init(username: "admin", password: "pa,ss") }
+    #expect(found.contains { $0.severity == .error && $0.message.contains("comma") })
+  }
+
+  @Test func provisioningProblemIsReportedEvenWhenEveryValueIsInvalid() {
+    // Invalid values are left out of the argument, so the profile looks empty; it must still fail.
+    let found = issues { $0.provisioning = RunOptions.Provisioning(fullName: "Doe, Jane") }
+    #expect(found.contains { $0.severity == .error && $0.message.contains("comma") })
+  }
+
+  @Test func validProvisioningValuesHaveNoCommaError() {
+    let found = issues { $0.provisioning = .init(username: "admin", password: "p=ss") }
+    #expect(!found.contains { $0.message.contains("comma") })
+  }
+
   private func errors(_ issues: [RunOptionsIssue]) -> [RunOptionsIssue] { issues.filter { $0.severity == .error } }
 
   @Test func defaultOptionsHaveNoErrors() {

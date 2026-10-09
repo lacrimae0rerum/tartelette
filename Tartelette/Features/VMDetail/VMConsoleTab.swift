@@ -59,8 +59,14 @@ final class ConsoleRun: Identifiable {
     }
   }
 
-  fileprivate func finish(_ code: Int32, message: String?) {
-    if code != 0, let message, !message.isEmpty, blocks.last?.lines.contains(where: { $0.text == message }) != true {
+  /// Records the exit; the failure message is appended unless the run already printed it.
+  ///
+  /// Checks every retained line (once per run, at most `lineLimit`), not just the last block: the
+  /// message may have been streamed just before a new block began.
+  func finish(_ code: Int32, message: String?) {
+    if code != 0, let message, !message.isEmpty,
+      !blocks.contains(where: { block in block.lines.contains { $0.text == message } })
+    {
       append(message, isError: true)
     }
     exitCode = code

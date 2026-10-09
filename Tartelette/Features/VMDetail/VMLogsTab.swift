@@ -12,6 +12,8 @@ final class LogTail {
   private let url: URL
   private var offset: UInt64 = 0
   private var task: Task<Void, Never>?
+  /// After skipping into the middle of a line, nothing is shown until that line ends.
+  private var discardingPartialLine = false
 
   /// Only this much of a long log is loaded and kept on screen.
   static let window = 256 * 1024
@@ -57,20 +59,29 @@ final class LogTail {
       // Rotated or truncated.
       offset = 0
       text = ""
+      discardingPartialLine = false
     }
     guard end > offset else { return }
     let windowStart = end > UInt64(Self.window) ? end - UInt64(Self.window) : 0
     // More than a window arrived since the last read (or this is the first read of a long log):
     // the bytes in between are skipped, so the old text no longer connects to the new chunk.
     let skipped = windowStart > offset
-    try? handle.seek(toOffset: max(offset, windowStart))
-    let data = (try? handle.readToEnd()) ?? Data()
+    // When skipping, also read the byte before the window: it tells whether the window starts at
+    // a line boundary (keep its first line) or mid-line (drop up to the next newline).
+    try? handle.seek(toOffset: skipped ? windowStart - 1 : offset)
+    var data = (try? handle.readToEnd()) ?? Data()
     offset = end
-    var chunk = String(decoding: data, as: UTF8.self)
     if skipped {
-      // Start at the next full line rather than mid-line.
-      if let newline = chunk.firstIndex(of: "\n") { chunk = String(chunk[chunk.index(after: newline)...]) }
       text = ""
+      discardingPartialLine = data.first != UInt8(ascii: "\n")
+      data = data.dropFirst()
+    }
+    var chunk = String(decoding: data, as: UTF8.self)
+    if discardingPartialLine {
+      // Still inside the line that was cut: keep nothing until it ends.
+      guard let newline = chunk.firstIndex(of: "\n") else { return }
+      chunk = String(chunk[chunk.index(after: newline)...])
+      discardingPartialLine = false
     }
     text += chunk
     if text.utf8.count > Self.window {

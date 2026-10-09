@@ -52,6 +52,9 @@ final class VMClipboardState {
   fileprivate(set) var isTransferring = false
   fileprivate(set) var lastSent: ClipboardPayload?
   fileprivate(set) var lastReceived: ClipboardPayload?
+  /// Summary of the last payload received from the guest, kept even when the Mac clipboard has
+  /// already changed again and `lastReceived` couldn't be captured.
+  fileprivate(set) var lastReceivedSummary: String?
   fileprivate(set) var events: [ClipboardEventRecord] = []
   fileprivate(set) var lastProbe: Date?
 
@@ -270,18 +273,19 @@ final class ClipboardCenter {
     state.isSyncing = false
   }
 
-  private static func apply(_ event: ClipboardSyncEvent, to state: VMClipboardState) {
+  /// Applies one session event to a VM's state (internal for tests).
+  static func apply(_ event: ClipboardSyncEvent, to state: VMClipboardState, pasteboard: NSPasteboard = .general) {
     switch event {
     case .sentToGuest(let summary, _):
       state.record(.sent, "Sent \(summary)")
     case .receivedFromGuest(let summary, _):
       state.record(.received, "Received \(summary)")
-      // Let the pasteboard settle before reading it back: a reader that lands between
-      // `clearContents()` and the end of `writeObjects(_:)` sees a torn, partial clipboard.
-      Task { [weak state] in
-        try? await Task.sleep(for: .milliseconds(300))
-        state?.lastReceived = PasteboardCodec.snapshot()
-      }
+      state.lastReceivedSummary = summary
+      // The session finishes writing (and settling) the Mac clipboard before it emits, so read it
+      // now. Keep the snapshot only if it is still what was received: something copied on the Mac
+      // in between must not be shown, or remembered, as received from the guest.
+      let snapshot = PasteboardCodec.snapshot(pasteboard)
+      state.lastReceived = snapshot?.summary == summary ? snapshot : nil
     case .skipped(let reason):
       state.record(.skipped, reason)
     case .failed(let message):
@@ -301,12 +305,18 @@ final class ClipboardCenter {
   /// Drops every guest connection made under the previous Tart environment and re-probes the
   /// running VMs, so live sync resumes with endpoints built from the new environment.
   func reconnectAll() {
+    disconnectAll()
+    adoptRunningVMs()
+  }
+
+  /// Stops every session and forgets every route, without re-probing. Pair with
+  /// `adoptRunningVMs()` once the VM listing reflects the new environment.
+  func disconnectAll() {
     stopAll()
     for state in states.values {
       state.agentStatus = .unknown
       state.route = nil
     }
-    adoptRunningVMs()
   }
 
   // MARK: Manual transfers
@@ -352,6 +362,7 @@ final class ClipboardCenter {
       }
       PasteboardCodec.write(payload)
       state.lastReceived = payload
+      state.lastReceivedSummary = payload.summary
       state.record(.received, "Received \(payload.summary)")
     } catch {
       state.record(.failed, error.localizedDescription)

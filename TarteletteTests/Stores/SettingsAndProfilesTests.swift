@@ -25,9 +25,18 @@ nonisolated final class MemorySecretStore: SecretStore, @unchecked Sendable {
 }
 
 @Suite("Settings and run profiles")
-struct SettingsAndProfilesTests {
+final class SettingsAndProfilesTests {
+  /// Suites created by this test; removed when the test instance goes away so runs don't leave
+  /// preference domains behind in the test host's container.
+  private var suites: [String] = []
+
+  isolated deinit {
+    for suite in suites { UserDefaults.standard.removePersistentDomain(forName: suite) }
+  }
+
   private func defaults() -> UserDefaults {
     let suite = "tartelette-tests-\(UUID())"
+    suites.append(suite)
     let defaults = UserDefaults(suiteName: suite)!
     defaults.removePersistentDomain(forName: suite)
     return defaults

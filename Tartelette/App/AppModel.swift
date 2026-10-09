@@ -22,7 +22,9 @@ final class AppModel {
 
   /// Called when anything shown in the Dock (badge, progress) may have changed.
   var onDockStateChange: () -> Void = {}
-  private var started = false
+  /// Whether `start()` ran (a duplicate instance quits before starting anything).
+  private(set) var started = false
+  private var reconnectTask: Task<Void, Never>?
 
   init() {
     let settings = AppSettings()
@@ -70,14 +72,22 @@ final class AppModel {
   /// Re-detects Tart after the executable path, TART_HOME or environment settings changed.
   ///
   /// Does nothing unless the effective environment changed. Otherwise guest connections are
-  /// rebuilt (`ClipboardCenter.reconnectAll()`): VMs that stay running are re-probed and their live
-  /// sync resumes instead of silently stopping until the next restart.
+  /// rebuilt: sessions stop immediately, and once a listing from the new environment arrived the
+  /// running VMs are re-probed, so live sync resumes instead of silently stopping.
   func reloadEnvironment() {
     guard context.reload(settings: settings) else { return }
-    clipboard.reconnectAll()
+    // Drop connections made under the old environment now, but re-adopt running VMs only once the
+    // listing comes from the new one (a different TART_HOME holds different VMs).
+    clipboard.disconnectAll()
     library.startPolling()
     metrics.start()
     registries.refresh()
+    reconnectTask?.cancel()
+    reconnectTask = Task { [weak self] in
+      await self?.library.refreshAndWait()
+      guard let self, !Task.isCancelled else { return }
+      self.clipboard.adoptRunningVMs()
+    }
   }
 
   /// Asks VMs started by this app to shut down (used on quit when enabled in Settings).
