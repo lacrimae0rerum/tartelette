@@ -8,13 +8,31 @@ APP            := build/Tartelette.app
 INSTALL_DIR   ?= /Applications
 INSTALLED_APP  := $(INSTALL_DIR)/Tartelette.app
 
-.PHONY: all assets test test-kit test-app build run install uninstall check-install-dir clean open
+BRAND_ASSETS   := AppIcon.icon Assets.xcassets/Contents.json Assets.xcassets/AccentColor.colorset \
+                  Assets.xcassets/MenuBarIcon.imageset Assets.xcassets/MenuBarIconActive.imageset \
+                  Assets.xcassets/BrandMark.imageset
+
+.PHONY: all assets check-assets test test-kit test-app build run install uninstall check-install-dir clean open
 
 all: test build
 
 ## Regenerate the app icon, menu bar icons, accent colour and brand mark.
 assets:
 	swift Tools/BrandKit/render.swift "$(CURDIR)"
+
+## Re-render the brand assets into a temporary folder and fail if they differ from the committed
+## ones (the project itself is never touched).
+check-assets:
+	@tmp=$$(mktemp -d) || exit 1; trap 'rm -rf "$$tmp"' EXIT; \
+	swift Tools/BrandKit/render.swift "$$tmp" >/dev/null || exit 1; \
+	status=0; \
+	for item in $(BRAND_ASSETS); do \
+		diff -r -q "$$tmp/Tartelette/$$item" "Tartelette/$$item" || status=1; \
+	done; \
+	if [ $$status -ne 0 ]; then \
+		echo "Brand assets differ from Tools/BrandKit/render.swift: run 'make assets' and commit."; exit 1; \
+	fi; \
+	echo "Brand assets match Tools/BrandKit/render.swift."
 
 ## Run every test suite: the TarteletteKit package and the app target.
 test: test-kit test-app

@@ -4,3 +4,5 @@ build/
 DerivedData/
 xcuserdata/
 *.xcuserstate
+# BrandKit stages renders outside the project; ignore any legacy in-project staging folder.
+.brandkit-staging-*/

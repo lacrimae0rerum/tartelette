@@ -165,13 +165,50 @@ func recreateDirectory(_ url: URL) throws {
   try fm.createDirectory(at: url, withIntermediateDirectories: true)
 }
 
-/// Moves a fully rendered item over `destination` (replacing it in one step when it exists).
-func installItem(_ staged: URL, at destination: URL) throws {
+enum InstallError: Error, CustomStringConvertible {
+  /// Installing failed and some replaced items couldn't be restored; they're kept at `backups`.
+  case rollbackIncomplete(underlying: Error, backups: URL)
+
+  var description: String {
+    switch self {
+    case .rollbackIncomplete(let underlying, let backups):
+      "\(underlying); restoring the previous assets failed too, they are kept in \(backups.path)"
+    }
+  }
+}
+
+/// Moves every staged item over its destination, or none of them.
+///
+/// Existing destinations are first moved into `backups` (same volume, so these are renames). If any
+/// step fails, the items installed so far are removed and every backed-up item is moved back, so
+/// the project keeps exactly its previous assets; the caller deletes `backups` only after a full
+/// success. Throws `InstallError.rollbackIncomplete` when restoring itself failed.
+func installAll(_ items: [(staged: URL, destination: URL)], backups: URL) throws {
   let fm = FileManager.default
-  if fm.fileExists(atPath: destination.path) {
-    _ = try fm.replaceItemAt(destination, withItemAt: staged)
-  } else {
-    try fm.moveItem(at: staged, to: destination)
+  try fm.createDirectory(at: backups, withIntermediateDirectories: true)
+  var backedUp: [(backup: URL, destination: URL)] = []
+  var installed: [URL] = []
+  do {
+    for (index, item) in items.enumerated() {
+      if fm.fileExists(atPath: item.destination.path) {
+        let backup = backups.appendingPathComponent("\(index)-\(item.destination.lastPathComponent)")
+        try fm.moveItem(at: item.destination, to: backup)
+        backedUp.append((backup, item.destination))
+      }
+      try fm.createDirectory(at: item.destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+      try fm.moveItem(at: item.staged, to: item.destination)
+      installed.append(item.destination)
+    }
+  } catch {
+    var restored = true
+    for destination in installed.reversed() {
+      do { try fm.removeItem(at: destination) } catch { restored = false }
+    }
+    for entry in backedUp.reversed() {
+      do { try fm.moveItem(at: entry.backup, to: entry.destination) } catch { restored = false }
+    }
+    if !restored { throw InstallError.rollbackIncomplete(underlying: error, backups: backups) }
+    throw error
   }
 }
 
@@ -182,10 +219,13 @@ func normalizePDF(at url: URL) throws {
   let data = try Data(contentsOf: url)
   // Latin-1 maps every byte to one character, so binary streams round-trip unchanged.
   guard var text = String(data: data, encoding: .isoLatin1) else { throw BrandKitError.write(url) }
+  // Dates carry a 7-character zone suffix whatever the time zone (`Z00'00'`, `+02'00'`,
+  // `-05'30'`), so this replacement keeps the byte length in every zone.
   text = text.replacingOccurrences(
-    of: #"D:\d{14}Z00'00'"#, with: "D:20260101000000Z00'00'", options: .regularExpression)
+    of: #"D:\d{14}(?:Z|[+-])\d{2}'\d{2}'"#, with: "D:20260101000000Z00'00'", options: .regularExpression)
   guard let trailer = text.range(of: "trailer", options: .backwards) else {
-    try Data(text.utf8).write(to: url)
+    guard let normalized = text.data(using: .isoLatin1) else { throw BrandKitError.write(url) }
+    try normalized.write(to: url)
     return
   }
   let zeroID = "<" + String(repeating: "0", count: 32) + ">"
@@ -569,16 +609,27 @@ let projectDir = URL(fileURLWithPath: arguments[1], isDirectory: true).standardi
 let appDir = projectDir.appendingPathComponent("Tartelette", isDirectory: true)
 let catalog = appDir.appendingPathComponent("Assets.xcassets", isDirectory: true)
 
-// Everything is rendered into a staging directory first (same volume, so moves are renames) and
-// only swapped into the project once every file was written: a failure halfway leaves the
-// committed assets untouched.
-let staging = projectDir.appendingPathComponent(".brandkit-staging-\(UUID().uuidString)", isDirectory: true)
+// Everything is rendered into a temporary staging directory on the project's volume (outside the
+// project, so an interrupted run leaves nothing to commit; same volume, so the final moves are
+// renames) and only installed once every file was written. The install itself is all-or-nothing
+// (`installAll`), so a failure at any point leaves the committed assets as they were.
+let fm = FileManager.default
+let staging: URL
+do {
+  try fm.createDirectory(at: projectDir, withIntermediateDirectories: true)
+  staging = try fm.url(for: .itemReplacementDirectory, in: .userDomainMask, appropriateFor: projectDir, create: true)
+} catch {
+  FileHandle.standardError.write("BrandKit: can't create a staging directory: \(error)\n".data(using: .utf8)!)
+  exit(1)
+}
 let stagedApp = staging.appendingPathComponent("Tartelette", isDirectory: true)
 let stagedCatalog = stagedApp.appendingPathComponent("Assets.xcassets", isDirectory: true)
+// Kept only when a rollback failed, because it then holds the previous assets.
+var keepStaging = false
 
 do {
-  defer { try? FileManager.default.removeItem(at: staging) }
-  try FileManager.default.createDirectory(at: stagedCatalog, withIntermediateDirectories: true)
+  defer { if !keepStaging { try? fm.removeItem(at: staging) } }
+  try fm.createDirectory(at: stagedCatalog, withIntermediateDirectories: true)
   try writeJSON(["info": catalogInfo], to: stagedCatalog.appendingPathComponent("Contents.json"))
 
   try renderAppIcon(into: stagedApp)
@@ -587,13 +638,20 @@ do {
   try renderMenuBarIcon(named: "MenuBarIconActive", filled: true, into: stagedCatalog)
   try renderBrandMark(into: stagedCatalog)
 
-  try FileManager.default.createDirectory(at: catalog, withIntermediateDirectories: true)
-  try installItem(stagedApp.appendingPathComponent("AppIcon.icon"), at: appDir.appendingPathComponent("AppIcon.icon"))
-  for item in [
+  var items = [
+    (staged: stagedApp.appendingPathComponent("AppIcon.icon"), destination: appDir.appendingPathComponent("AppIcon.icon"))
+  ]
+  for name in [
     "Contents.json", "AccentColor.colorset", "MenuBarIcon.imageset", "MenuBarIconActive.imageset",
     "BrandMark.imageset",
   ] {
-    try installItem(stagedCatalog.appendingPathComponent(item), at: catalog.appendingPathComponent(item))
+    items.append((staged: stagedCatalog.appendingPathComponent(name), destination: catalog.appendingPathComponent(name)))
+  }
+  do {
+    try installAll(items, backups: staging.appendingPathComponent("previous", isDirectory: true))
+  } catch let error as InstallError {
+    keepStaging = true
+    throw error
   }
   print("BrandKit: rendered assets into \(appDir.path)")
 } catch {
