@@ -1,8 +1,7 @@
 import SwiftUI
 
-/// A row in a `KeyValueGrid`.
-struct KeyValueRow: Identifiable {
-  let id = UUID()
+/// A row in a `KeyValueGrid`. Rows are identified by their key (see `KeyValueGrid.identities`).
+struct KeyValueRow {
   let key: String
   let value: String
   var monospaced = false
@@ -21,9 +20,20 @@ struct KeyValueRow: Identifiable {
 struct KeyValueGrid: View {
   let rows: [KeyValueRow]
 
+  /// Stable identities derived from the keys, so SwiftUI keeps per-row state across re-renders.
+  /// A repeated key gets its occurrence number appended (`Key`, `Key#2`, …).
+  static func identities(for rows: [KeyValueRow]) -> [String] {
+    var seen: [String: Int] = [:]
+    return rows.map { row in
+      let count = (seen[row.key] ?? 0) + 1
+      seen[row.key] = count
+      return count == 1 ? row.key : "\(row.key)#\(count)"
+    }
+  }
+
   var body: some View {
     Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 14, verticalSpacing: 8) {
-      ForEach(rows) { row in
+      ForEach(Array(zip(Self.identities(for: rows), rows)), id: \.0) { _, row in
         GridRow {
           Text(row.key)
             .foregroundStyle(.secondary)

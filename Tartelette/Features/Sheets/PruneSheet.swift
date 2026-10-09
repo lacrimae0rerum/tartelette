@@ -47,7 +47,7 @@ struct PruneSheet: View {
           }
           HStack(spacing: 8) {
             Toggle("Keep within", isOn: $limitSpace)
-            NumberStepperField(title: "Space budget", value: $spaceBudgetGB, range: 1...65_535, step: 10, unit: "GB")
+            NumberStepperField(title: "Space budget", value: $spaceBudgetGB, range: 1...65_535, step: 10, unit: "GiB")
               .disabled(!limitSpace)
           }
           FieldHint("The space budget keeps the most recently used entries that fit and removes the rest.")
@@ -92,20 +92,13 @@ struct PruneSheet: View {
 
   // MARK: Estimate
 
-  private struct Candidate: Identifiable {
-    var id: String { name }
-    let name: String
-    let bytes: UInt64
-    let accessed: Date?
-  }
-
-  private var candidates: [Candidate] {
+  private var candidates: [PruneEstimate.Entry] {
     switch entries {
     case .vms:
       return model.library.vms.filter { !$0.state.isRunning }.map { vm in
-        Candidate(
+        PruneEstimate.Entry(
           name: vm.name,
-          bytes: model.metrics.vmAllocatedBytes[vm.name] ?? UInt64(max(0, (vm.sizeGB ?? 0) * 1e9)),
+          bytes: model.metrics.vmAllocatedBytes[vm.name] ?? PruneEstimate.bytes(listedGB: vm.sizeGB),
           accessed: vm.lastAccessed)
       }
     case .caches:
@@ -113,29 +106,18 @@ struct PruneSheet: View {
       let images = model.library.images
       let digests = images.filter { $0.name.contains("@sha256:") }
       return (digests.isEmpty ? images : digests).map { image in
-        Candidate(name: image.name, bytes: UInt64(max(0, (image.sizeGB ?? 0) * 1e9)), accessed: image.lastAccessed)
+        PruneEstimate.Entry(
+          name: image.name, bytes: PruneEstimate.bytes(listedGB: image.sizeGB), accessed: image.lastAccessed)
       }
     }
   }
 
-  /// What the current criteria would remove (Tart decides at run time; this mirrors its rules).
-  private var affected: [Candidate] {
-    var removed: [String: Candidate] = [:]
-    if limitAge {
-      let cutoff = Date.now.addingTimeInterval(-Double(olderThanDays) * 86_400)
-      for candidate in candidates where (candidate.accessed ?? .distantPast) <= cutoff {
-        removed[candidate.name] = candidate
-      }
-    }
-    if limitSpace {
-      let budget = UInt64(spaceBudgetGB) * 1_073_741_824
-      var used: UInt64 = 0
-      for candidate in candidates.sorted(by: { ($0.accessed ?? .distantPast) > ($1.accessed ?? .distantPast) }) {
-        used += candidate.bytes
-        if used > budget { removed[candidate.name] = candidate }
-      }
-    }
-    return removed.values.sorted { $0.bytes > $1.bytes }
+  /// What the current criteria would remove — an estimate; Tart decides at run time.
+  private var affected: [PruneEstimate.Entry] {
+    PruneEstimate.affected(
+      candidates,
+      olderThanDays: limitAge ? olderThanDays : nil,
+      spaceBudgetGiB: limitSpace ? spaceBudgetGB : nil)
   }
 
   @ViewBuilder private var estimate: some View {
@@ -143,7 +125,7 @@ struct PruneSheet: View {
       let affected = affected
       VStack(alignment: .leading, spacing: 8) {
         HStack {
-          Text("Right now this would remove").font(.subheadline.weight(.medium))
+          Text("Estimated removal right now").font(.subheadline.weight(.medium))
           Spacer()
           Text(affected.isEmpty ? "Nothing" : Formatting.bytes(affected.reduce(0) { $0 + $1.bytes }))
             .font(.subheadline.weight(.semibold))
@@ -174,9 +156,10 @@ struct PruneSheet: View {
             }
           }
         }
-        if entries == .caches {
-          FieldHint("Cached macOS restore images (IPSWs) are pruned by the same rules.")
-        }
+        FieldHint(
+          entries == .caches
+            ? "An estimate from listed sizes; Tart measures exact allocated sizes when it runs. Cached macOS restore images (IPSWs) are pruned by the same rules."
+            : "An estimate; Tart measures exact allocated sizes and access dates when it runs.")
       }
       .padding(12)
       .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
@@ -208,5 +191,65 @@ struct PruneSheet: View {
         errorMessage = error.localizedDescription
       }
     }
+  }
+}
+
+/// Mirrors `tart prune`'s selection rules so the sheet can preview what a run would remove.
+///
+/// Units follow Tart: `--space-budget` is in GiB (1024³ bytes) and compared with allocated bytes;
+/// `tart list` reports sizes in decimal GB (10⁹ bytes), truncated, so listed entries are estimates.
+enum PruneEstimate {
+  struct Entry: Identifiable, Equatable {
+    var id: String { name }
+    let name: String
+    let bytes: UInt64
+    let accessed: Date?
+  }
+
+  static let bytesPerGiB: UInt64 = 1_073_741_824
+  static let bytesPerListedGB = 1e9
+
+  /// Bytes for a size reported by `tart list` (decimal GB); unknown or invalid sizes count as 0.
+  static func bytes(listedGB: Double?) -> UInt64 {
+    guard let listedGB, listedGB.isFinite, listedGB > 0 else { return 0 }
+    let bytes = listedGB * bytesPerListedGB
+    return bytes >= Double(UInt64.max) ? .max : UInt64(bytes)
+  }
+
+  /// The entries Tart would remove, largest first.
+  ///
+  /// - `olderThanDays`: entries whose access date is at or before now − n days (no date counts
+  ///   as oldest).
+  /// - `spaceBudgetGiB`: walking from the most recently accessed, entries are kept while they fit
+  ///   in the remaining budget; an entry that doesn't fit is removed and the walk continues, so a
+  ///   smaller, older entry can still be kept (Tart's `pruneSpaceBudget` loop).
+  static func affected(
+    _ entries: [Entry],
+    olderThanDays: Int?,
+    spaceBudgetGiB: Int?,
+    now: Date = .now
+  ) -> [Entry] {
+    var removed: [String: Entry] = [:]
+    if let olderThanDays {
+      let cutoff = now.addingTimeInterval(-Double(olderThanDays) * 86_400)
+      for entry in entries where (entry.accessed ?? .distantPast) <= cutoff {
+        removed[entry.name] = entry
+      }
+    }
+    if let spaceBudgetGiB {
+      let (budget, overflow) = UInt64(max(0, spaceBudgetGiB)).multipliedReportingOverflow(by: bytesPerGiB)
+      var remaining = overflow ? UInt64.max : budget
+      let newestFirst = entries
+        .filter { removed[$0.name] == nil }
+        .sorted { ($0.accessed ?? .distantPast) > ($1.accessed ?? .distantPast) }
+      for entry in newestFirst {
+        if entry.bytes <= remaining {
+          remaining -= entry.bytes
+        } else {
+          removed[entry.name] = entry
+        }
+      }
+    }
+    return removed.values.sorted { $0.bytes == $1.bytes ? $0.name < $1.name : $0.bytes > $1.bytes }
   }
 }

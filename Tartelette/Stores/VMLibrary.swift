@@ -4,7 +4,7 @@ import Observation
 import TarteletteKit
 
 /// A VM appeared, disappeared or changed state between two refreshes.
-struct VMStateChange: Equatable {
+nonisolated struct VMStateChange: Equatable {
   let name: String
   /// nil when the VM is new.
   let oldState: VMState?
@@ -148,15 +148,7 @@ final class VMLibrary {
 
   private func applyListing(_ listing: [VMListing], configs newConfigs: [String: VMConfigFile]) {
     let newVMs = listing.filter { $0.source == .local }
-    let oldStates = Dictionary(vms.map { ($0.name, $0.state) }, uniquingKeysWith: { first, _ in first })
-    let newStates = Dictionary(newVMs.map { ($0.name, $0.state) }, uniquingKeysWith: { first, _ in first })
-    var changes: [VMStateChange] = []
-    for (name, state) in newStates where oldStates[name] != state {
-      changes.append(VMStateChange(name: name, oldState: oldStates[name], newState: state))
-    }
-    for (name, state) in oldStates where newStates[name] == nil {
-      changes.append(VMStateChange(name: name, oldState: state, newState: nil))
-    }
+    let changes = Self.stateChanges(from: vms, to: newVMs)
 
     if vms != newVMs { vms = newVMs }
     let newImages = listing.filter { $0.source == .oci }
@@ -439,6 +431,21 @@ final class VMLibrary {
   /// Whether a running VM was started by Tartelette — in this session or an earlier one.
   func wasStartedByTartelette(_ name: String) -> Bool {
     launched[name] != nil || adoptedLaunches.contains(name)
+  }
+
+  /// State transitions between two listings of local VMs: appeared (old state nil), changed, and
+  /// disappeared (new state nil), sorted by name. Unchanged VMs produce nothing.
+  nonisolated static func stateChanges(from old: [VMListing], to new: [VMListing]) -> [VMStateChange] {
+    let oldStates = Dictionary(old.map { ($0.name, $0.state) }, uniquingKeysWith: { first, _ in first })
+    let newStates = Dictionary(new.map { ($0.name, $0.state) }, uniquingKeysWith: { first, _ in first })
+    var changes: [VMStateChange] = []
+    for (name, state) in newStates where oldStates[name] != state {
+      changes.append(VMStateChange(name: name, oldState: oldStates[name], newState: state))
+    }
+    for (name, state) in oldStates where newStates[name] == nil {
+      changes.append(VMStateChange(name: name, oldState: state, newState: nil))
+    }
+    return changes.sorted { $0.name < $1.name }
   }
 
   // MARK: Log helpers

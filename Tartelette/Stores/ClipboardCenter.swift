@@ -276,7 +276,12 @@ final class ClipboardCenter {
       state.record(.sent, "Sent \(summary)")
     case .receivedFromGuest(let summary, _):
       state.record(.received, "Received \(summary)")
-      state.lastReceived = PasteboardCodec.snapshot()
+      // Let the pasteboard settle before reading it back: a reader that lands between
+      // `clearContents()` and the end of `writeObjects(_:)` sees a torn, partial clipboard.
+      Task { [weak state] in
+        try? await Task.sleep(for: .milliseconds(300))
+        state?.lastReceived = PasteboardCodec.snapshot()
+      }
     case .skipped(let reason):
       state.record(.skipped, reason)
     case .failed(let message):
@@ -291,6 +296,17 @@ final class ClipboardCenter {
       state.probeTask?.cancel()
       stopSession(state)
     }
+  }
+
+  /// Drops every guest connection made under the previous Tart environment and re-probes the
+  /// running VMs, so live sync resumes with endpoints built from the new environment.
+  func reconnectAll() {
+    stopAll()
+    for state in states.values {
+      state.agentStatus = .unknown
+      state.route = nil
+    }
+    adoptRunningVMs()
   }
 
   // MARK: Manual transfers

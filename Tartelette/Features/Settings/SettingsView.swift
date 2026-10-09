@@ -186,24 +186,59 @@ private struct MonitoringSettings: View {
 
 // MARK: - Registries & network
 
-/// Registry override fields being edited. They are applied once typing settles (or on Return /
-/// leaving the pane), so half-typed credentials never reach Tart and the environment isn't
-/// rebuilt on every keystroke.
-private struct RegistryOverrideDraft: Equatable {
+/// Registry override fields being edited.
+///
+/// Edits stay local until the user commits them explicitly (Return, Apply, or leaving the pane),
+/// and only a consistent set is ever applied: a user name together with a password, or neither.
+/// So a half-typed password is never written to the Keychain and Tart never runs with an
+/// incomplete `TART_REGISTRY_*` set; the environment is rebuilt once per commit, not per keystroke.
+struct RegistryOverrideDraft: Equatable {
   var username = ""
   var password = ""
   var hostname = ""
 
   init() {}
 
+  init(username: String, password: String, hostname: String) {
+    self.username = username
+    self.password = password
+    self.hostname = hostname
+  }
+
   init(_ settings: AppSettings) {
-    username = settings.registryUsername
-    password = settings.registryPassword
-    hostname = settings.registryHostname
+    self.init(
+      username: settings.registryUsername, password: settings.registryPassword, hostname: settings.registryHostname)
+  }
+
+  private var trimmedUsername: String { username.trimmingCharacters(in: .whitespacesAndNewlines) }
+  private var trimmedHostname: String { hostname.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+  /// Why the draft can't be applied yet, or nil when it can.
+  var problem: String? {
+    let hasUser = !trimmedUsername.isEmpty
+    let hasPassword = !password.isEmpty
+    if hasUser != hasPassword { return "Enter both a user name and a password, or clear both." }
+    if !hasUser, !trimmedHostname.isEmpty { return "A host restriction needs a user name and a password." }
+    if trimmedHostname.contains("/") {
+      return "Enter only the registry host, e.g. ghcr.io (no scheme or path)."
+    }
+    return nil
+  }
+
+  var isConsistent: Bool { problem == nil }
+
+  /// The values to store, trimmed.
+  var normalized: RegistryOverrideDraft {
+    RegistryOverrideDraft(username: trimmedUsername, password: password, hostname: trimmedHostname)
+  }
+
+  /// Whether committing the draft would change the stored overrides.
+  func differs(username: String, password: String, hostname: String) -> Bool {
+    normalized != RegistryOverrideDraft(username: username, password: password, hostname: hostname)
   }
 
   func differs(from settings: AppSettings) -> Bool {
-    self != RegistryOverrideDraft(settings)
+    differs(username: settings.registryUsername, password: settings.registryPassword, hostname: settings.registryHostname)
   }
 }
 
@@ -234,10 +269,22 @@ private struct NetworkSettings: View {
           .onSubmit(applyRegistryDraft)
         TextField("Only for host", text: $registryDraft.hostname, prompt: Text("Any registry"))
           .onSubmit(applyRegistryDraft)
+        HStack {
+          if let problem = registryDraft.problem {
+            Label(problem, systemImage: "exclamationmark.triangle.fill")
+              .font(.caption)
+              .foregroundStyle(.orange)
+          }
+          Spacer()
+          Button("Revert") { registryDraft = RegistryOverrideDraft(settings) }
+            .disabled(!registryDraft.differs(from: settings))
+          Button("Apply", action: applyRegistryDraft)
+            .disabled(!registryDraft.isConsistent || !registryDraft.differs(from: settings))
+        }
       } header: {
         Text("Registry credentials override")
       } footer: {
-        Text("Passed to Tart as TART_REGISTRY_* variables, which take precedence over Docker and Keychain credentials. Prefer Registries › Log In for everyday use.")
+        Text("Passed to Tart as TART_REGISTRY_* variables, which take precedence over Docker and Keychain credentials. Changes apply when you press Return or Apply. Prefer Registries › Log In for everyday use.")
       }
 
       Section {
@@ -272,24 +319,21 @@ private struct NetworkSettings: View {
       registryDraft = RegistryOverrideDraft(settings)
       registryDraftLoaded = true
     }
-    // Debounce: each edit cancels the pending apply; the last one wins after a short pause.
-    .task(id: registryDraft) {
-      try? await Task.sleep(for: .milliseconds(800))
-      guard !Task.isCancelled else { return }
-      applyRegistryDraft()
-    }
     .onDisappear(perform: applyRegistryDraft)
     .task { inspectSoftnet() }
   }
 
-  /// Stores the edited registry overrides and rebuilds Tart's environment, once, if they changed.
+  /// Commits the edited registry overrides — only a consistent set, and only if it changed — then
+  /// rebuilds Tart's environment once. Inconsistent drafts stay unapplied (the form explains why).
   private func applyRegistryDraft() {
     let settings = model.settings
-    guard registryDraftLoaded, registryDraft.differs(from: settings) else { return }
-    if settings.registryUsername != registryDraft.username { settings.registryUsername = registryDraft.username }
+    guard registryDraftLoaded, registryDraft.isConsistent, registryDraft.differs(from: settings) else { return }
+    let draft = registryDraft.normalized
+    if settings.registryUsername != draft.username { settings.registryUsername = draft.username }
     // Only touch the Keychain when the password actually changed.
-    if settings.registryPassword != registryDraft.password { settings.registryPassword = registryDraft.password }
-    if settings.registryHostname != registryDraft.hostname { settings.registryHostname = registryDraft.hostname }
+    if settings.registryPassword != draft.password { settings.registryPassword = draft.password }
+    if settings.registryHostname != draft.hostname { settings.registryHostname = draft.hostname }
+    registryDraft = draft
     model.reloadEnvironment()
   }
 

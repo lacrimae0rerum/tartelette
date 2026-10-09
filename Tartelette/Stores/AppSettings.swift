@@ -10,6 +10,10 @@ import TarteletteKit
 @Observable
 final class AppSettings {
   private let defaults: UserDefaults
+  private let secrets: any SecretStore
+
+  static let sshService = "dev.tartelette.ssh"
+  static let registryService = "dev.tartelette.registry"
 
   // MARK: General
 
@@ -43,7 +47,7 @@ final class AppSettings {
   /// SSH fallback (guests without the Tart Guest Agent). Cirrus Labs images use admin/admin.
   var sshUsername: String { didSet { store(sshUsername, "sshUsername") } }
   var sshPassword: String {
-    didSet { KeychainSecret(service: "dev.tartelette.ssh").write(sshPassword) }
+    didSet { secrets.write(sshPassword, service: Self.sshService) }
   }
 
   // MARK: Registries & network
@@ -53,7 +57,7 @@ final class AppSettings {
   var registryUsername: String { didSet { store(registryUsername, "registryUsername") } }
   var registryHostname: String { didSet { store(registryHostname, "registryHostname") } }
   var registryPassword: String {
-    didSet { KeychainSecret(service: "dev.tartelette.registry").write(registryPassword) }
+    didSet { secrets.write(registryPassword, service: Self.registryService) }
   }
 
   // MARK: Launch at login
@@ -62,8 +66,9 @@ final class AppSettings {
   private(set) var launchAtLogin: Bool
   private(set) var launchAtLoginError: String?
 
-  init(defaults: UserDefaults = .standard) {
+  init(defaults: UserDefaults = .standard, secrets: any SecretStore = KeychainSecretStore()) {
     self.defaults = defaults
+    self.secrets = secrets
     func value<T>(_ key: String, _ fallback: T) -> T { defaults.object(forKey: "settings." + key) as? T ?? fallback }
 
     tartExecutablePath = defaults.string(forKey: "settings.tartExecutablePath")
@@ -80,11 +85,11 @@ final class AppSettings {
     maxAutoTransferMB = value("maxAutoTransferMB", 50)
     syncFiles = value("syncFiles", true)
     sshUsername = value("sshUsername", CatalogImage.defaultUsername)
-    sshPassword = KeychainSecret(service: "dev.tartelette.ssh").read() ?? ""
+    sshPassword = secrets.read(service: Self.sshService) ?? ""
     disableAutoPrune = value("disableAutoPrune", false)
     registryUsername = value("registryUsername", "")
     registryHostname = value("registryHostname", "")
-    registryPassword = KeychainSecret(service: "dev.tartelette.registry").read() ?? ""
+    registryPassword = secrets.read(service: Self.registryService) ?? ""
     launchAtLogin = SMAppService.mainApp.status == .enabled
   }
 

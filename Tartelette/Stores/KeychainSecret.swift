@@ -42,3 +42,15 @@ nonisolated struct KeychainSecret: Sendable {
     return SecItemAdd(add as CFDictionary, nil) == errSecSuccess
   }
 }
+
+/// Where secrets are kept: the login Keychain in the app, an in-memory store in tests.
+nonisolated protocol SecretStore: Sendable {
+  func read(service: String) -> String?
+  /// Stores `value`, or removes the secret when it is nil or empty.
+  func write(_ value: String?, service: String)
+}
+
+nonisolated struct KeychainSecretStore: SecretStore {
+  func read(service: String) -> String? { KeychainSecret(service: service).read() }
+  func write(_ value: String?, service: String) { KeychainSecret(service: service).write(value) }
+}

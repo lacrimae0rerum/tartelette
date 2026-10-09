@@ -68,9 +68,13 @@ final class AppModel {
   }
 
   /// Re-detects Tart after the executable path, TART_HOME or environment settings changed.
+  ///
+  /// Does nothing unless the effective environment changed. Otherwise guest connections are
+  /// rebuilt (`ClipboardCenter.reconnectAll()`): VMs that stay running are re-probed and their live
+  /// sync resumes instead of silently stopping until the next restart.
   func reloadEnvironment() {
     guard context.reload(settings: settings) else { return }
-    clipboard.stopAll()
+    clipboard.reconnectAll()
     library.startPolling()
     metrics.start()
     registries.refresh()

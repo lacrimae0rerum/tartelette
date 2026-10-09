@@ -261,18 +261,62 @@ nonisolated enum ReferenceValidation {
       return "Include the registry host, e.g. “ghcr.io/org/image:tag”."
     }
     let host = value[..<slash]
-    if host.isEmpty || !(host.contains(".") || host.contains(":") || host == "localhost") {
-      return "“\(host)” doesn't look like a registry host."
-    }
-    let remainder = value[value.index(after: slash)...]
-    if remainder.isEmpty || remainder.hasPrefix("/") || remainder.hasPrefix(":") || remainder.hasPrefix("@") {
-      return "Add a repository after the host."
-    }
+    if let problem = hostProblem(host) { return problem }
+    var remainder = value[value.index(after: slash)...]
+
+    // Optional digest: exactly "sha256:" followed by 64 lowercase hex characters.
     if let at = remainder.firstIndex(of: "@") {
       let digest = remainder[remainder.index(after: at)...]
-      if !digest.hasPrefix("sha256:") || digest.count != 71 { return "Digests look like “@sha256:” plus 64 hex characters." }
+      let hex = digest.dropFirst("sha256:".count)
+      guard digest.hasPrefix("sha256:"), hex.count == 64, hex.allSatisfy(isLowercaseHex) else {
+        return "Digests look like “@sha256:” plus 64 lowercase hex characters."
+      }
+      remainder = remainder[..<at]
+      if remainder.split(separator: "/", omittingEmptySubsequences: false).last?.contains(":") == true {
+        return "Use either a tag or a digest, not both."
+      }
+    }
+
+    // Optional tag after the last path component's colon.
+    let components = remainder.split(separator: "/", omittingEmptySubsequences: false)
+    guard var last = components.last else { return "Add a repository after the host." }
+    if let colon = last.firstIndex(of: ":") {
+      let tag = last[last.index(after: colon)...]
+      if tag.isEmpty { return "Add a tag after “:”, e.g. “:latest”, or leave the colon out." }
+      if tag.count > 128 || tag.first == "." || tag.first == "-" || !tag.allSatisfy(isTagCharacter) {
+        return "Tags use letters, digits, “_”, “.” and “-” (up to 128, not starting with “.” or “-”)."
+      }
+      last = last[..<colon]
+    }
+    let repository = components.dropLast().map(String.init) + [String(last)]
+    if repository.contains(where: \.isEmpty) { return "Add a repository after the host." }
+    return nil
+  }
+
+  /// `host[:port]`: a dotted name, an IP address or `localhost`, with an optional numeric port.
+  private static func hostProblem(_ host: Substring) -> String? {
+    var name = host
+    if let colon = host.lastIndex(of: ":") {
+      let port = host[host.index(after: colon)...]
+      guard let number = Int(port), (1...65_535).contains(number), port.allSatisfy(\.isASCII), port.allSatisfy(\.isNumber)
+      else {
+        return "“\(host)” has an invalid port."
+      }
+      name = host[..<colon]
+    }
+    let isHostLike = name.contains(".") || name == "localhost" || host.contains(":")
+    if name.isEmpty || !isHostLike || name.hasPrefix(".") || name.hasSuffix(".") || name.contains("..") {
+      return "“\(host)” doesn't look like a registry host."
     }
     return nil
+  }
+
+  private static func isLowercaseHex(_ character: Character) -> Bool {
+    character.isASCII && (character.isNumber || ("a"..."f").contains(character))
+  }
+
+  private static func isTagCharacter(_ character: Character) -> Bool {
+    character.isASCII && (character.isLetter || character.isNumber || "_.-".contains(character))
   }
 
   static func isRemote(_ name: String) -> Bool { problem(with: name) == nil }
@@ -297,17 +341,26 @@ nonisolated enum ReferenceValidation {
 extension VMLibrary {
   /// A name based on `base` that no local VM uses yet (`base`, `base-2`, `base-3`…).
   func uniqueName(basedOn base: String) -> String {
-    let taken = Set(vms.map(\.name))
+    Self.uniqueName(basedOn: base, taken: Set(vms.map(\.name)))
+  }
+
+  /// Problem with a new local VM name, or nil. `allowExisting` permits replacing a VM.
+  func problemWithNewName(_ name: String, allowExisting: Bool = false) -> String? {
+    Self.problemWithNewName(name, existing: Set(vms.map(\.name)), allowExisting: allowExisting)
+  }
+
+  nonisolated static func uniqueName(basedOn base: String, taken: Set<String>) -> String {
     guard taken.contains(base) else { return base }
     var index = 2
     while taken.contains("\(base)-\(index)") { index += 1 }
     return "\(base)-\(index)"
   }
 
-  /// Problem with a new local VM name, or nil. `allowExisting` permits replacing a VM.
-  func problemWithNewName(_ name: String, allowExisting: Bool = false) -> String? {
+  nonisolated static func problemWithNewName(_ name: String, existing: Set<String>, allowExisting: Bool = false)
+    -> String?
+  {
     if let problem = VMNameValidation.problem(with: name) { return problem }
-    if !allowExisting, vm(named: name) != nil { return "A VM named “\(name)” already exists." }
+    if !allowExisting, existing.contains(name) { return "A VM named “\(name)” already exists." }
     return nil
   }
 }

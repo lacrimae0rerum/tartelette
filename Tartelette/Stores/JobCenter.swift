@@ -72,15 +72,17 @@ final class Job: Identifiable {
     case .finished(let exitCode, let message):
       finishedAt = .now
       operation = nil
-      if exitCode == 0 {
-        state = .succeeded
-        if progress != nil { progress = 1 }
-      } else if message == "Cancelled." || exitCode == 128 + SIGINT {
-        state = .cancelled
-      } else {
-        state = .failed(message ?? "Tart exited with code \(exitCode).")
-      }
+      state = Self.finalState(exitCode: exitCode, message: message)
+      if state == .succeeded, progress != nil { progress = 1 }
     }
+  }
+
+  /// Maps Tart's exit status to a job outcome. SIGINT (exit 130, or TartOperation's "Cancelled."
+  /// when Tart printed nothing) is how jobs are cancelled, so it is not reported as a failure.
+  static func finalState(exitCode: Int32, message: String?) -> State {
+    if exitCode == 0 { return .succeeded }
+    if message == "Cancelled." || exitCode == 128 + SIGINT { return .cancelled }
+    return .failed(message ?? "Tart exited with code \(exitCode).")
   }
 
   fileprivate func fail(_ message: String) {
@@ -189,13 +191,22 @@ final class JobCenter {
   }
 
   private func trimHistory() {
-    guard jobs.count > Self.historyLimit else { return }
-    var excess = jobs.count - Self.historyLimit
-    jobs.removeAll { job in
-      guard excess > 0, !job.isActive else { return false }
+    let evicted = Self.evictionIndices(activeFlags: jobs.map(\.isActive), limit: Self.historyLimit)
+    guard !evicted.isEmpty else { return }
+    jobs = jobs.enumerated().filter { !evicted.contains($0.offset) }.map(\.element)
+  }
+
+  /// Indices of the jobs to drop so at most `limit` remain. `jobs` is ordered newest first, so the
+  /// oldest finished jobs (from the end) go first; running jobs are never evicted.
+  static func evictionIndices(activeFlags: [Bool], limit: Int) -> Set<Int> {
+    var excess = activeFlags.count - limit
+    guard excess > 0 else { return [] }
+    var evicted: Set<Int> = []
+    for index in activeFlags.indices.reversed() where excess > 0 && !activeFlags[index] {
+      evicted.insert(index)
       excess -= 1
-      return true
     }
+    return evicted
   }
 
   // MARK: Notifications
