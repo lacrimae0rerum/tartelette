@@ -60,6 +60,15 @@ Linux guests need a desktop session plus `wl-clipboard` or `xclip`/`xsel`; the C
 server images have no desktop, so the bridge reports clipboard as unavailable there (file
 transfer, console and metrics still work).
 
+Good to know:
+
+- A change is synced once it has settled: half-written clipboards (an app still adding items)
+  and file items their app hasn't handed over yet are retried instead of sent partially.
+- For 10 seconds after a sync, a copy of *some* of the just-synced files counts as an echo and
+  isn't sent back. Copy them again after that window if you meant it.
+- Only one Tartelette runs at a time: launching a second copy brings the first one forward, so
+  two copies never sync the same VM against each other.
+
 ## Build from source
 
 ```bash
