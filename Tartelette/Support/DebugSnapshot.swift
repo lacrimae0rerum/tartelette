@@ -14,7 +14,8 @@ import TarteletteKit
 /// `vm:<name>` or `vm:<name>:<tab>` (a `VMDetailTab` raw value), `sheet:<newVM|pull|import|prune|login>`,
 /// `sheet:newVM:<image|macOS|linux|importArchive>`, `sheet:<clone|rename|push|export|delete|stop|run>:<name>`,
 /// `menubar` (opens the menu bar extra), `start:<vm>` (headless), `launch:<vm>` (saved run profile),
-/// `stop:<vm>`, `close` (closes
+/// `stop:<vm>`, `pbdump` (how this process reads the pasteboard), `cbdump:<vm>` (clipboard
+/// history), `close` (closes
 /// auxiliary windows).
 enum DebugSnapshot {
   static func scheduleIfRequested(model: AppModel) {
@@ -69,6 +70,24 @@ enum DebugSnapshot {
       model.library.start(parts[1])
     case "stop" where parts.count == 2:
       model.library.stop(parts[1])
+    case "pbdump":
+      // Records how this process reads the general pasteboard (diagnostics for file URL handling).
+      let board = NSPasteboard.general
+      let items = (board.pasteboardItems ?? []).map { $0.string(forType: .fileURL) ?? $0.types.map(\.rawValue).joined(separator: ",") }
+      let objects = (board.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL]) ?? []
+      let snapshot = PasteboardCodec.snapshot(board)?.files.map(\.lastPathComponent) ?? []
+      let report = "items: \(items)\nreadObjects: \(objects.map(\.lastPathComponent))\nsnapshot: \(snapshot)\n"
+      let folder = UserDefaults.standard.string(forKey: "TarteletteSnapshot") ?? NSTemporaryDirectory()
+      try? report.write(toFile: (folder as NSString).appendingPathComponent("pbdump.txt"), atomically: true, encoding: .utf8)
+    case "cbdump" where parts.count == 2:
+      // Dumps a VM's clipboard history (diagnostics for live sync).
+      let state = model.clipboard.state(for: parts[1])
+      let formatter = ISO8601DateFormatter()
+      formatter.formatOptions = [.withTime, .withFractionalSeconds]
+      let lines = state.events.reversed().map { "\(formatter.string(from: $0.date)) \($0.kind) \($0.message)" }
+      let folder = UserDefaults.standard.string(forKey: "TarteletteSnapshot") ?? NSTemporaryDirectory()
+      try? (lines.joined(separator: "\n") + "\n").write(
+        toFile: (folder as NSString).appendingPathComponent("cbdump.txt"), atomically: true, encoding: .utf8)
     case "close":
       for window in NSApp.windows where window.isVisible && window.identifier?.rawValue != "main" {
         window.close()
