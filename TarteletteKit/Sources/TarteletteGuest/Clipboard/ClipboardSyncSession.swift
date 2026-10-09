@@ -54,6 +54,9 @@ public final class ClipboardSyncSession {
     /// How long after acting on a host change its contents keep being compared, to catch items a
     /// writer adds late (without bumping the change count).
     public var hostLateWriteWindow: Duration
+    /// How long after a sync a reduced copy of the synced files (a system component republishing
+    /// the clipboard without some of them, e.g. hidden files) counts as an echo rather than a copy.
+    public var degradedEchoWindow: Duration
 
     public init(
       direction: Direction = .bidirectional,
@@ -63,7 +66,8 @@ public final class ClipboardSyncSession {
       includeFiles: Bool = true,
       maximumBackoff: Duration = .seconds(15),
       guestSettleDelay: Duration = .milliseconds(300),
-      hostLateWriteWindow: Duration = .seconds(1)
+      hostLateWriteWindow: Duration = .seconds(1),
+      degradedEchoWindow: Duration = .seconds(10)
     ) {
       self.direction = direction
       self.hostPollInterval = hostPollInterval
@@ -73,6 +77,7 @@ public final class ClipboardSyncSession {
       self.maximumBackoff = maximumBackoff
       self.guestSettleDelay = guestSettleDelay
       self.hostLateWriteWindow = hostLateWriteWindow
+      self.degradedEchoWindow = degradedEchoWindow
     }
   }
 
@@ -123,6 +128,9 @@ public final class ClipboardSyncSession {
   /// Until when contents under the handled change count are still compared (late writes).
   private var hostLateWriteDeadline: ContinuousClock.Instant?
   private var knownGuestChangeCount: Int?
+  /// Name and size of the files moved by the last sync (either direction), and when.
+  private var lastSyncedFiles: Set<FileIdentity> = []
+  private var lastSyncedFilesAt: ContinuousClock.Instant?
   /// Transfers running or queued; polls skip while it is non-zero.
   private(set) var activeTransfers = 0
   private var transferQueue: Task<Void, Never>?
@@ -269,6 +277,7 @@ public final class ClipboardSyncSession {
     hostLateWriteDeadline = ContinuousClock.now + configuration.hostLateWriteWindow
 
     guard let payload = snapshotHost(), payload.fingerprint != lastSyncedFingerprint else { return }
+    guard !isDegradedEcho(payload) else { return }
     if payload.totalByteCount > configuration.maxAutomaticTransferBytes {
       if lastSkippedFingerprint != payload.fingerprint {
         lastSkippedFingerprint = payload.fingerprint
@@ -305,6 +314,7 @@ public final class ClipboardSyncSession {
       knownGuestChangeCount = state.changeCount
       lastSyncedFingerprint = payload.fingerprint
       lastPushedGuestFingerprint = state.fingerprint
+      rememberSyncedFiles(payload)
       lastRejectedFingerprint = nil
       emit(.sentToGuest(summary: payload.summary, date: Date()))
       return .sent
@@ -419,6 +429,28 @@ public final class ClipboardSyncSession {
   }
 
   /// Whether a payload read from the guest is our own write coming back.
+  /// A file identity that survives being copied between staging folders.
+  struct FileIdentity: Hashable, Sendable {
+    var name: String
+    var size: Int
+  }
+
+  private func rememberSyncedFiles(_ payload: ClipboardPayload) {
+    lastSyncedFiles = Set(payload.files.map { FileIdentity(name: $0.lastPathComponent, size: ClipboardPayload.byteCount(of: $0)) })
+    lastSyncedFilesAt = payload.files.isEmpty ? nil : ContinuousClock.now
+  }
+
+  /// A strict subset of the files just synced, shortly after the sync: some system component
+  /// republished the clipboard without part of it (hidden files are typical). Sending it back
+  /// would overwrite the complete copy on the other side.
+  func isDegradedEcho(_ payload: ClipboardPayload) -> Bool {
+    guard let syncedAt = lastSyncedFilesAt, ContinuousClock.now - syncedAt < configuration.degradedEchoWindow,
+      payload.items.isEmpty, !payload.files.isEmpty
+    else { return false }
+    let identities = Set(payload.files.map { FileIdentity(name: $0.lastPathComponent, size: ClipboardPayload.byteCount(of: $0)) })
+    return identities.isSubset(of: lastSyncedFiles)
+  }
+
   func isEcho(_ payload: ClipboardPayload) -> Bool {
     payload.fingerprint == lastSyncedFingerprint || payload.fingerprint == lastPushedGuestFingerprint
   }
@@ -444,13 +476,14 @@ public final class ClipboardSyncSession {
       }
       // A Linux guest holding the plain-text projection of a richer host clipboard must not
       // downgrade the host.
-      guard force || !isEcho(payload) else { return .skipped }
+      guard force || !(isEcho(payload) || isDegradedEcho(payload)) else { return .skipped }
       let changeCount = PasteboardCodec.write(payload, to: hostPasteboard)
       handledHost = HostObservation(changeCount: changeCount, shape: PasteboardCodec.shape(hostPasteboard))
       pendingHost = nil
       hostLateWriteDeadline = nil
       lastSyncedFingerprint = payload.fingerprint
       lastPushedGuestFingerprint = nil
+      rememberSyncedFiles(payload)
       emit(.receivedFromGuest(summary: payload.summary, date: Date()))
       return .received
     } catch GuestTransportError.tooLarge(let bytes, let limit) {
