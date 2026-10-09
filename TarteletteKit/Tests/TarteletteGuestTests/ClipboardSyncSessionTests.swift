@@ -267,6 +267,9 @@ struct ClipboardSyncSessionTests {
 
     controllable.isReachable = true
     #expect(await waitUntil { fixture.guestBoard.string(forType: .string) == "written while offline" })
+    // The guest board changes inside the write script; the event follows once the script returns.
+    #expect(await waitUntil { log.sentCount >= 1 })
+    try await Task.sleep(for: .milliseconds(300))
     #expect(log.sentCount == 1)
   }
 
