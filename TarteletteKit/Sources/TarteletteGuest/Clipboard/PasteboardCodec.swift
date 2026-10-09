@@ -23,19 +23,50 @@ public enum PasteboardCodec {
     }.joined(separator: "|")
   }
 
-  /// Captures the transferable contents of a pasteboard, or nil when it holds nothing supported.
+  /// The result of reading a pasteboard.
+  public enum Capture: Equatable, Sendable {
+    /// Everything the pasteboard holds was read; nil when it holds nothing supported.
+    case complete(ClipboardPayload?)
+    /// Some item hasn't been handed over by its writer yet; read again later.
+    case incomplete
+  }
+
+  /// Reads the transferable contents of a pasteboard.
   ///
   /// File URLs win over other flavours (Finder also adds icons and names, which aren't useful
-  /// remotely). TIFF-only images are converted to PNG, which is far smaller to transfer.
-  public static func snapshot(_ pasteboard: NSPasteboard = .general) -> ClipboardPayload? {
-    let fileURLs = (pasteboard.readObjects(
-      forClasses: [NSURL.self],
-      options: [.urlReadingFileURLsOnly: true]
-    ) as? [URL]) ?? []
+  /// remotely). Every item declaring a file URL must resolve: writers hand items to the pasteboard
+  /// server lazily, and an item that hasn't arrived yet would otherwise be silently left out, so
+  /// a partial copy would be synced. TIFF-only images are converted to PNG, which is far smaller
+  /// to transfer.
+  public static func capture(_ pasteboard: NSPasteboard = .general) -> Capture {
+    let items = pasteboard.pasteboardItems ?? []
+    var fileURLs: [URL] = []
+    var declaresFileURLs = false
+    for item in items where item.types.contains(.fileURL) {
+      declaresFileURLs = true
+      guard let string = item.string(forType: .fileURL), let url = URL(string: string), url.isFileURL else {
+        return .incomplete
+      }
+      // File reference URLs (file:///.file/id=…) resolve to a path URL.
+      fileURLs.append((url as NSURL).filePathURL ?? url)
+    }
+    if !declaresFileURLs {
+      // Writers using legacy flavours (e.g. NSFilenamesPboardType) only surface through URL reading.
+      fileURLs = (pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL]) ?? []
+    }
     let existingFiles = fileURLs.filter { FileManager.default.fileExists(atPath: $0.path) }
-    if !existingFiles.isEmpty { return ClipboardPayload(files: existingFiles) }
+    if !existingFiles.isEmpty { return .complete(ClipboardPayload(files: existingFiles)) }
+    return .complete(flavours(of: items.first))
+  }
 
-    guard let item = pasteboard.pasteboardItems?.first else { return nil }
+  /// The transferable contents of a pasteboard, or nil when it holds nothing supported or some
+  /// item hasn't been handed over yet (see `capture(_:)`).
+  public static func snapshot(_ pasteboard: NSPasteboard = .general) -> ClipboardPayload? {
+    if case .complete(let payload) = capture(pasteboard) { payload } else { nil }
+  }
+
+  private static func flavours(of item: NSPasteboardItem?) -> ClipboardPayload? {
+    guard let item else { return nil }
     let declared = Set(item.types.map(\.rawValue))
     var items: [ClipboardRepresentation] = []
     for type in ClipboardRepresentation.supportedTypes where declared.contains(type) {

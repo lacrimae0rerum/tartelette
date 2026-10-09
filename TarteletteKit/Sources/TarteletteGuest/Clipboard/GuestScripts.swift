@@ -233,17 +233,40 @@ public enum GuestScripts {
           while (!(f = e.nextObject).isNil()) { var a = e.fileAttributes; if (!a.isNil()) total += Number(a.fileSize); }
           return total;
         }
+        // Paths of every item declaring a file URL, or null while some item hasn't been handed
+        // over by its (lazy) writer yet: reading such an item would silently drop it.
+        function readFileItems(pb) {
+          for (var attempt = 0; attempt < 10; attempt++) {
+            var items = pb.pasteboardItems, n = items.isNil() ? 0 : Number(items.count), paths = [], missing = false;
+            for (var i = 0; i < n; i++) {
+              var item = items.objectAtIndex(i), types = ObjC.deepUnwrap(item.types) || [];
+              if (types.indexOf('public.file-url') < 0) continue;
+              var s = item.stringForType('public.file-url');
+              var url = s.isNil() ? $() : $.NSURL.URLWithString(s);
+              if (url.isNil() || !url.fileURL) { missing = true; break; }
+              var resolved = url.filePathURL;
+              paths.push((resolved.isNil() ? url : resolved).path.js);
+            }
+            if (!missing) return paths;
+            delay(0.1);
+          }
+          return null;
+        }
         function run(argv) {
           var pb = board(argv[0]), stage = expand(argv[1]), limit = parseInt(argv[2], 10);
           var fm = $.NSFileManager.defaultManager;
           var result = { changeCount: Number(pb.changeCount), items: [], files: [], staged: null };
-          var urls = pb.readObjectsForClassesOptions($([$.NSURL]), $({ 'NSPasteboardURLReadingFileURLsOnlyKey': true }));
-          if (!urls.isNil()) {
-            for (var i = 0; i < urls.count; i++) {
-              var path = urls.objectAtIndex(i).path.js, isDir = Ref();
-              if (!fm.fileExistsAtPathIsDirectory(path, isDir)) continue;
-              result.files.push({ path: path, size: sizeOf(fm, path, isDir[0]), directory: !!isDir[0] });
-            }
+          var paths = readFileItems(pb);
+          if (paths === null) { result.incomplete = true; emit(result); return; }
+          if (paths.length === 0) {
+            // Legacy writers (e.g. NSFilenamesPboardType) only surface through URL reading.
+            var urls = pb.readObjectsForClassesOptions($([$.NSURL]), $({ 'NSPasteboardURLReadingFileURLsOnlyKey': true }));
+            if (!urls.isNil()) { for (var u = 0; u < urls.count; u++) paths.push(urls.objectAtIndex(u).path.js); }
+          }
+          for (var p = 0; p < paths.length; p++) {
+            var path = paths[p], isDir = Ref();
+            if (!fm.fileExistsAtPathIsDirectory(path, isDir)) continue;
+            result.files.push({ path: path, size: sizeOf(fm, path, isDir[0]), directory: !!isDir[0] });
           }
           if (result.files.length > 0) { emit(result); return; }
           var items = pb.pasteboardItems;

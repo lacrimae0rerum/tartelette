@@ -338,6 +338,8 @@ public actor ClipboardBridge {
         inlineLimit: options.inlineLimit),
       operation: "read the guest clipboard", timeout: .seconds(60))
     let manifest = try decode(GuestManifest.self, from: output.stdout)
+    // A writer in the guest hasn't handed every file item over yet; don't read a partial copy.
+    if manifest.incomplete { throw GuestTransferError.incomplete }
 
     if !manifest.files.isEmpty {
       guard includeFiles else { return nil }
@@ -629,8 +631,10 @@ struct GuestManifest: Decodable {
   var items: [Entry]
   var files: [FileEntry]
   var staged: Staged?
+  /// Some file item didn't resolve in the guest (macOS only).
+  var incomplete: Bool
 
-  enum CodingKeys: String, CodingKey { case changeCount, items, files, staged }
+  enum CodingKeys: String, CodingKey { case changeCount, items, files, staged, incomplete }
 
   init(from decoder: any Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -638,6 +642,7 @@ struct GuestManifest: Decodable {
     items = try container.decodeIfPresent([Entry].self, forKey: .items) ?? []
     files = try container.decodeIfPresent([FileEntry].self, forKey: .files) ?? []
     staged = try container.decodeIfPresent(Staged.self, forKey: .staged)
+    incomplete = try container.decodeIfPresent(Bool.self, forKey: .incomplete) ?? false
   }
 }
 

@@ -52,11 +52,15 @@ public enum GuestTransportError: Error, Sendable, Equatable, LocalizedError {
 public enum GuestTransferError: Error, Sendable, Equatable, LocalizedError {
   /// Several selected items share a name; copying them into one folder would overwrite some.
   case duplicateNames([String])
+  /// The clipboard is still being handed over by its writer (some item didn't resolve yet).
+  case incomplete
 
   public var errorDescription: String? {
     switch self {
     case .duplicateNames(let names):
       "Several items are named \(names.map { "“\($0)”" }.joined(separator: ", ")). Copy them separately or rename them first."
+    case .incomplete:
+      "The clipboard is still being written. Try again in a moment."
     }
   }
 

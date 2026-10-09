@@ -57,6 +57,9 @@ public final class ClipboardSyncSession {
     /// How long after a sync a reduced copy of the synced files (a system component republishing
     /// the clipboard without some of them, e.g. hidden files) counts as an echo rather than a copy.
     public var degradedEchoWindow: Duration
+    /// How long a host copy may stay unreadable (an item its writer never handed over) before a
+    /// one-time `.skipped` event reports it.
+    public var incompleteReportDelay: Duration
 
     public init(
       direction: Direction = .bidirectional,
@@ -67,7 +70,8 @@ public final class ClipboardSyncSession {
       maximumBackoff: Duration = .seconds(15),
       guestSettleDelay: Duration = .milliseconds(300),
       hostLateWriteWindow: Duration = .seconds(1),
-      degradedEchoWindow: Duration = .seconds(10)
+      degradedEchoWindow: Duration = .seconds(10),
+      incompleteReportDelay: Duration = .seconds(5)
     ) {
       self.direction = direction
       self.hostPollInterval = hostPollInterval
@@ -78,6 +82,7 @@ public final class ClipboardSyncSession {
       self.guestSettleDelay = guestSettleDelay
       self.hostLateWriteWindow = hostLateWriteWindow
       self.degradedEchoWindow = degradedEchoWindow
+      self.incompleteReportDelay = incompleteReportDelay
     }
   }
 
@@ -128,6 +133,9 @@ public final class ClipboardSyncSession {
   /// Until when contents under the handled change count are still compared (late writes).
   private var hostLateWriteDeadline: ContinuousClock.Instant?
   private var knownGuestChangeCount: Int?
+  /// The host change count whose contents couldn't be read completely, since when, and whether
+  /// that was reported.
+  private var incompleteHost: (changeCount: Int, since: ContinuousClock.Instant, reported: Bool)?
   /// Name and size of the files moved by the last sync (either direction), and when.
   private var lastSyncedFiles: Set<FileIdentity> = []
   private var lastSyncedFilesAt: ContinuousClock.Instant?
@@ -206,7 +214,11 @@ public final class ClipboardSyncSession {
   /// Waits for any in-flight transfer first.
   @discardableResult
   public func sendNow() async -> Bool {
-    guard let payload = snapshotHost() else {
+    guard case .complete(let captured) = PasteboardCodec.capture(hostPasteboard) else {
+      emit(.skipped(reason: "The Mac clipboard is still being written. Try again in a moment."))
+      return false
+    }
+    guard let payload = hostPayload(captured) else {
       emit(.skipped(reason: "The Mac clipboard is empty."))
       return false
     }
@@ -271,12 +283,20 @@ public final class ClipboardSyncSession {
       return
     }
     guard activeTransfers == 0, guestStatus.isAvailable else { return }
+    guard case .complete(let captured) = PasteboardCodec.capture(hostPasteboard) else {
+      // An item hasn't been handed over by its writer yet: leave the change unhandled and observe
+      // it afresh, rather than sending a partial copy.
+      pendingHost = nil
+      reportIncompleteHost(observation.changeCount)
+      return
+    }
+    incompleteHost = nil
     pendingHost = nil
     let previous = handledHost
     handledHost = observation
     hostLateWriteDeadline = ContinuousClock.now + configuration.hostLateWriteWindow
 
-    guard let payload = snapshotHost(), payload.fingerprint != lastSyncedFingerprint else { return }
+    guard let payload = hostPayload(captured), payload.fingerprint != lastSyncedFingerprint else { return }
     guard !isDegradedEcho(payload) else { return }
     if payload.totalByteCount > configuration.maxAutomaticTransferBytes {
       if lastSkippedFingerprint != payload.fingerprint {
@@ -295,7 +315,24 @@ public final class ClipboardSyncSession {
   }
 
   private func snapshotHost() -> ClipboardPayload? {
-    guard let payload = PasteboardCodec.snapshot(hostPasteboard) else { return nil }
+    hostPayload(PasteboardCodec.snapshot(hostPasteboard))
+  }
+
+  /// Reports once when the same host copy stays unreadable longer than `incompleteReportDelay`.
+  private func reportIncompleteHost(_ changeCount: Int) {
+    let now = ContinuousClock.now
+    guard let incomplete = incompleteHost, incomplete.changeCount == changeCount else {
+      incompleteHost = (changeCount, now, false)
+      return
+    }
+    guard !incomplete.reported, now - incomplete.since >= configuration.incompleteReportDelay else { return }
+    incompleteHost?.reported = true
+    emit(.skipped(reason: "Some copied items couldn't be read from the Mac clipboard. Copy them again to send them."))
+  }
+
+  /// Applies the session's filters (e.g. `includeFiles`) to captured host contents.
+  private func hostPayload(_ captured: ClipboardPayload?) -> ClipboardPayload? {
+    guard let payload = captured else { return nil }
     if !configuration.includeFiles, !payload.files.isEmpty { return nil }
     return payload
   }
@@ -396,8 +433,8 @@ public final class ClipboardSyncSession {
     guard activeTransfers == 0, changeCount != knownGuestChangeCount else { return }
     let maxBytes = configuration.maxAutomaticTransferBytes
     let outcome = await serialized { await self.receive(maxBytes: maxBytes, force: false) }
-    if outcome == .transientFailure {
-      // Keep the change pending: the next poll (after the back-off) pulls it again.
+    if outcome == .transientFailure || outcome == .pending {
+      // Keep the change pending: the next poll pulls it again.
       return
     }
     if knownGuestChangeCount == known { knownGuestChangeCount = changeCount }
@@ -461,6 +498,8 @@ public final class ClipboardSyncSession {
     case skipped
     /// The guest couldn't be reached; the change stays pending.
     case transientFailure
+    /// The guest clipboard is still being handed over by its writer; read it again next poll.
+    case pending
     /// The guest was reached but the read failed deterministically; the change is dropped.
     case permanentFailure
   }
@@ -486,6 +525,10 @@ public final class ClipboardSyncSession {
       rememberSyncedFiles(payload)
       emit(.receivedFromGuest(summary: payload.summary, date: Date()))
       return .received
+    } catch GuestTransferError.incomplete {
+      // Not a failure: a writer is still handing items over. Silent for automatic sync.
+      if force { emit(.skipped(reason: "The clipboard in \(endpoint.vmName) is still being written. Try again in a moment.")) }
+      return .pending
     } catch GuestTransportError.tooLarge(let bytes, let limit) {
       let size = ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
       let maximum = ByteCountFormatter.string(fromByteCount: Int64(limit), countStyle: .file)
