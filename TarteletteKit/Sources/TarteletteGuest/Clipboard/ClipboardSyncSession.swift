@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import TarteletteCore
 
 public enum ClipboardSyncEvent: Sendable, Equatable {
   case sentToGuest(summary: String, date: Date)
@@ -15,13 +16,18 @@ public enum ClipboardSyncEvent: Sendable, Equatable {
 /// direction), the fingerprint of what the guest holds after a push (a projection on Linux guests)
 /// and the change counts produced by its own writes on both sides. A change is only propagated
 /// when it was made by someone else and its contents differ from what was last synced, so a
-/// payload never bounces back. Host changes are coalesced: a change is sent once the host
-/// pasteboard has been stable for one poll interval.
+/// payload never bounces back.
+///
+/// Settling: writers clear a pasteboard (bumping its change count) and then add items (which
+/// doesn't bump it), so a read can land on a half-written pasteboard. A host change is acted on
+/// only once two polls agree on both its change count and its contents (an empty pasteboard never
+/// counts as settled), and for a short window afterwards contents that change under the same count
+/// are treated as a new change. A guest change is pulled only once its change count stops moving.
 ///
 /// Transfers are serialised: manual sends and fetches queue behind an in-flight transfer, and
-/// polls skip while any transfer is active. A host change is only marked as handled once it was
-/// sent or deliberately skipped, so changes made while the guest is unreachable are sent when it
-/// comes back.
+/// polls skip while any transfer is active. Changes are only marked as handled once they were
+/// moved, deliberately skipped or failed permanently, so changes made while the other side is
+/// unreachable are moved when it comes back.
 @MainActor
 public final class ClipboardSyncSession {
   public enum Direction: String, Sendable, CaseIterable {
@@ -42,6 +48,12 @@ public final class ClipboardSyncSession {
     public var includeFiles: Bool
     /// Upper bound of the guest poll back-off while the guest is unreachable.
     public var maximumBackoff: Duration
+    /// After the guest change count moves, wait this long and re-read it before pulling, until it
+    /// stops moving (a guest app may still be writing). Zero pulls immediately.
+    public var guestSettleDelay: Duration
+    /// How long after acting on a host change its contents keep being compared, to catch items a
+    /// writer adds late (without bumping the change count).
+    public var hostLateWriteWindow: Duration
 
     public init(
       direction: Direction = .bidirectional,
@@ -49,7 +61,9 @@ public final class ClipboardSyncSession {
       guestPollInterval: Duration = .milliseconds(1500),
       maxAutomaticTransferBytes: Int = 50 * 1024 * 1024,
       includeFiles: Bool = true,
-      maximumBackoff: Duration = .seconds(15)
+      maximumBackoff: Duration = .seconds(15),
+      guestSettleDelay: Duration = .milliseconds(300),
+      hostLateWriteWindow: Duration = .seconds(1)
     ) {
       self.direction = direction
       self.hostPollInterval = hostPollInterval
@@ -57,7 +71,34 @@ public final class ClipboardSyncSession {
       self.maxAutomaticTransferBytes = maxAutomaticTransferBytes
       self.includeFiles = includeFiles
       self.maximumBackoff = maximumBackoff
+      self.guestSettleDelay = guestSettleDelay
+      self.hostLateWriteWindow = hostLateWriteWindow
     }
+  }
+
+  /// Whether a failed transfer is worth retrying.
+  enum FailureKind: Sendable, Equatable {
+    /// The guest couldn't be reached (agent missing, VM stopped, timeout); retry once it is back.
+    case transient
+    /// The guest was reached and refused or failed deterministically (permission denied, disk
+    /// full, unexpected output, unsupported, too large…); retrying the same payload won't help.
+    case permanent
+  }
+
+  nonisolated static func failureKind(of error: any Error) -> FailureKind {
+    switch error {
+    case GuestTransportError.unreachable, ProcessRunError.timedOut, ProcessRunError.launchFailed,
+      ProcessRunError.cancelled, is CancellationError:
+      .transient
+    default:
+      .permanent
+    }
+  }
+
+  /// One observation of the host pasteboard.
+  struct HostObservation: Equatable {
+    var changeCount: Int
+    var shape: String
   }
 
   public let endpoint: GuestEndpoint
@@ -75,8 +116,12 @@ public final class ClipboardSyncSession {
   private var lastSyncedFingerprint: String?
   /// What the guest holds after our last push (differs from the payload on Linux guests).
   private var lastPushedGuestFingerprint: String?
-  private var knownHostChangeCount = 0
-  private var pendingHostChangeCount: Int?
+  /// The host state last acted on (or adopted at start, or produced by our own write).
+  private var handledHost: HostObservation?
+  /// A host state seen once; acted on when the next poll sees exactly the same state.
+  private var pendingHost: HostObservation?
+  /// Until when contents under the handled change count are still compared (late writes).
+  private var hostLateWriteDeadline: ContinuousClock.Instant?
   private var knownGuestChangeCount: Int?
   /// Transfers running or queued; polls skip while it is non-zero.
   private(set) var activeTransfers = 0
@@ -86,6 +131,11 @@ public final class ClipboardSyncSession {
   /// The guest has no usable clipboard (e.g. no clipboard tool); re-checked at the maximum back-off.
   private(set) var guestClipboardUnsupported = false
   private var lastSkippedFingerprint: String?
+  /// The last payload the guest refused permanently; it is reported once and not retried.
+  private var lastRejectedFingerprint: String?
+
+  /// How many times the guest change count is re-read while it keeps moving.
+  private static let maximumSettleRounds = 10
 
   public init(
     endpoint: GuestEndpoint,
@@ -110,8 +160,9 @@ public final class ClipboardSyncSession {
   public func start() {
     guard !isRunning else { return }
     isRunning = true
-    knownHostChangeCount = hostPasteboard.changeCount
-    pendingHostChangeCount = nil
+    handledHost = currentHostObservation()
+    pendingHost = nil
+    hostLateWriteDeadline = nil
 
     // The loops hold `self` only for one iteration at a time, so a forgotten session still deallocates.
     guestTask = Task { [weak self] in
@@ -151,14 +202,14 @@ public final class ClipboardSyncSession {
       emit(.skipped(reason: "The Mac clipboard is empty."))
       return false
     }
-    return await serialized { await self.send(payload) == .sent }
+    return await serialized { await self.send(payload, manual: true) == .sent }
   }
 
   /// Fetches the guest clipboard now, ignoring the size limit and the "already synced" check.
   /// Waits for any in-flight transfer first.
   @discardableResult
   public func fetchNow() async -> Bool {
-    await serialized { await self.receive(maxBytes: nil, force: true) }
+    await serialized { await self.receive(maxBytes: nil, force: true) } == .received
   }
 
   // MARK: Transfers
@@ -179,24 +230,44 @@ public final class ClipboardSyncSession {
 
   // MARK: Host → guest
 
-  private func pollHost() async {
-    let current = hostPasteboard.changeCount
-    if current == knownHostChangeCount {
-      pendingHostChangeCount = nil
-      return
-    }
-    // Coalesce bursts: act once the pasteboard has been stable for a full interval.
-    guard pendingHostChangeCount == current else {
-      pendingHostChangeCount = current
-      return
-    }
-    // Leave the change pending (not handled) while busy or while the guest is unreachable; it is
-    // picked up by a later poll.
-    guard activeTransfers == 0, guestStatus.isAvailable else { return }
+  private func currentHostObservation() -> HostObservation {
+    HostObservation(changeCount: hostPasteboard.changeCount, shape: PasteboardCodec.shape(hostPasteboard))
+  }
 
-    let previousKnown = knownHostChangeCount
-    knownHostChangeCount = current
-    pendingHostChangeCount = nil
+  private func pollHost() async {
+    let count = hostPasteboard.changeCount
+    if let handled = handledHost, count == handled.changeCount {
+      // Same change count as the state last acted on: only items added late can still differ.
+      let isPendingLateWrite = pendingHost?.changeCount == count
+      let inWindow = hostLateWriteDeadline.map { ContinuousClock.now < $0 } ?? false
+      guard isPendingLateWrite || inWindow else { return }
+      let shape = PasteboardCodec.shape(hostPasteboard)
+      guard shape != handled.shape else {
+        pendingHost = nil
+        return
+      }
+      await observeHost(HostObservation(changeCount: count, shape: shape))
+      return
+    }
+    // Leave the change unhandled while busy or while the guest is unreachable; a later poll
+    // observes it again once the guest is back.
+    guard activeTransfers == 0, guestStatus.isAvailable else { return }
+    await observeHost(currentHostObservation())
+  }
+
+  /// Acts on a host state once two consecutive polls saw exactly the same change count and
+  /// contents. An empty pasteboard is a writer between `clearContents` and `writeObjects`.
+  private func observeHost(_ observation: HostObservation) async {
+    guard !observation.shape.isEmpty, pendingHost == observation else {
+      pendingHost = observation
+      return
+    }
+    guard activeTransfers == 0, guestStatus.isAvailable else { return }
+    pendingHost = nil
+    let previous = handledHost
+    handledHost = observation
+    hostLateWriteDeadline = ContinuousClock.now + configuration.hostLateWriteWindow
+
     guard let payload = snapshotHost(), payload.fingerprint != lastSyncedFingerprint else { return }
     if payload.totalByteCount > configuration.maxAutomaticTransferBytes {
       if lastSkippedFingerprint != payload.fingerprint {
@@ -205,10 +276,12 @@ public final class ClipboardSyncSession {
       }
       return
     }
-    let outcome = await serialized { await self.send(payload) }
-    if outcome == .unreachable, knownHostChangeCount == current {
+    guard payload.fingerprint != lastRejectedFingerprint else { return }
+    let outcome = await serialized { await self.send(payload, manual: false) }
+    if outcome == .unreachable, handledHost == observation {
       // Not delivered because the guest couldn't be reached: retry once it is back.
-      knownHostChangeCount = previousKnown
+      handledHost = previous
+      hostLateWriteDeadline = nil
     }
   }
 
@@ -220,29 +293,33 @@ public final class ClipboardSyncSession {
 
   enum SendOutcome: Sendable, Equatable {
     case sent
-    /// The guest rejected this payload (unsupported, duplicate names, integrity); retrying won't help.
+    /// The guest refused this payload deterministically; retrying won't help.
     case rejected
     /// The guest couldn't be reached; the change should be retried later.
     case unreachable
   }
 
-  private func send(_ payload: ClipboardPayload) async -> SendOutcome {
+  private func send(_ payload: ClipboardPayload, manual: Bool) async -> SendOutcome {
     do {
       let state = try await bridge.pushToGuest(payload, endpoint: endpoint)
       knownGuestChangeCount = state.changeCount
       lastSyncedFingerprint = payload.fingerprint
       lastPushedGuestFingerprint = state.fingerprint
+      lastRejectedFingerprint = nil
       emit(.sentToGuest(summary: payload.summary, date: Date()))
       return .sent
     } catch {
-      emit(.failed(message: "Couldn't send to \(endpoint.vmName): \(error.localizedDescription)"))
-      switch error {
-      case is GuestTransferError, GuestTransportError.unsupported, GuestTransportError.integrityCheckFailed,
-        GuestTransportError.tooLarge:
-        return .rejected
-      default:
+      let message = "Couldn't send to \(endpoint.vmName): \(error.localizedDescription)"
+      switch Self.failureKind(of: error) {
+      case .transient:
+        emit(.failed(message: message))
         recordClipboardFailure(error)
         return .unreachable
+      case .permanent:
+        if case GuestTransportError.unsupported = error { recordClipboardFailure(error) }
+        if manual || lastRejectedFingerprint != payload.fingerprint { emit(.failed(message: message)) }
+        lastRejectedFingerprint = payload.fingerprint
+        return .rejected
       }
     }
   }
@@ -286,7 +363,7 @@ public final class ClipboardSyncSession {
       return
     }
     guard configuration.direction.receivesFromGuest else { return }
-    let changeCount: Int
+    var changeCount: Int
     do {
       changeCount = try await bridge.guestChangeCount(endpoint)
     } catch {
@@ -298,10 +375,35 @@ public final class ClipboardSyncSession {
       knownGuestChangeCount = changeCount
       return
     }
-    guard changeCount != known, activeTransfers == 0 else { return }
-    knownGuestChangeCount = changeCount
+    guard changeCount != known else { return }
+    do {
+      changeCount = try await settledGuestChangeCount(from: changeCount)
+    } catch {
+      recordClipboardFailure(error)
+      return
+    }
+    // Our own push may have happened while settling.
+    guard activeTransfers == 0, changeCount != knownGuestChangeCount else { return }
     let maxBytes = configuration.maxAutomaticTransferBytes
-    await serialized { await self.receive(maxBytes: maxBytes, force: false) }
+    let outcome = await serialized { await self.receive(maxBytes: maxBytes, force: false) }
+    if outcome == .transientFailure {
+      // Keep the change pending: the next poll (after the back-off) pulls it again.
+      return
+    }
+    if knownGuestChangeCount == known { knownGuestChangeCount = changeCount }
+  }
+
+  /// Re-reads the guest change count after `guestSettleDelay` until it stops moving.
+  private func settledGuestChangeCount(from observed: Int) async throws -> Int {
+    guard configuration.guestSettleDelay > .zero else { return observed }
+    var latest = observed
+    for _ in 0..<Self.maximumSettleRounds {
+      try await Task.sleep(for: configuration.guestSettleDelay)
+      let again = try await bridge.guestChangeCount(endpoint)
+      if again == latest { return again }
+      latest = again
+    }
+    return latest
   }
 
   /// Counts a failed clipboard operation. "No clipboard tool" makes the guest stably unavailable
@@ -321,33 +423,48 @@ public final class ClipboardSyncSession {
     payload.fingerprint == lastSyncedFingerprint || payload.fingerprint == lastPushedGuestFingerprint
   }
 
-  @discardableResult
-  private func receive(maxBytes: Int?, force: Bool) async -> Bool {
+  enum ReceiveOutcome: Sendable, Equatable {
+    case received
+    /// Nothing to apply (empty, our own echo, over the limit or filtered out).
+    case skipped
+    /// The guest couldn't be reached; the change stays pending.
+    case transientFailure
+    /// The guest was reached but the read failed deterministically; the change is dropped.
+    case permanentFailure
+  }
+
+  private func receive(maxBytes: Int?, force: Bool) async -> ReceiveOutcome {
     do {
       let includeFiles = configuration.includeFiles || force
       guard let payload = try await bridge.pullFromGuest(endpoint, maxBytes: maxBytes, includeFiles: includeFiles),
         !payload.isEmpty
       else {
         if force { emit(.skipped(reason: "The clipboard in \(endpoint.vmName) is empty.")) }
-        return false
+        return .skipped
       }
       // A Linux guest holding the plain-text projection of a richer host clipboard must not
       // downgrade the host.
-      guard force || !isEcho(payload) else { return false }
-      knownHostChangeCount = PasteboardCodec.write(payload, to: hostPasteboard)
-      pendingHostChangeCount = nil
+      guard force || !isEcho(payload) else { return .skipped }
+      let changeCount = PasteboardCodec.write(payload, to: hostPasteboard)
+      handledHost = HostObservation(changeCount: changeCount, shape: PasteboardCodec.shape(hostPasteboard))
+      pendingHost = nil
+      hostLateWriteDeadline = nil
       lastSyncedFingerprint = payload.fingerprint
       lastPushedGuestFingerprint = nil
       emit(.receivedFromGuest(summary: payload.summary, date: Date()))
-      return true
+      return .received
     } catch GuestTransportError.tooLarge(let bytes, let limit) {
       let size = ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
       let maximum = ByteCountFormatter.string(fromByteCount: Int64(limit), countStyle: .file)
       emit(.skipped(reason: "The clipboard in \(endpoint.vmName) holds \(size), above the \(maximum) automatic limit. Use Paste from VM to copy it anyway."))
-      return false
+      return .skipped
     } catch {
       emit(.failed(message: "Couldn't read the clipboard of \(endpoint.vmName): \(error.localizedDescription)"))
-      return false
+      if Self.failureKind(of: error) == .transient {
+        recordClipboardFailure(error)
+        return .transientFailure
+      }
+      return .permanentFailure
     }
   }
 

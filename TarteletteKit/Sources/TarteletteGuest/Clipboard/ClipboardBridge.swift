@@ -150,9 +150,16 @@ public actor ClipboardBridge {
       await removeGuest([guestArchive], endpoint)
       throw error
     }
-    let output = try await checked(
-      endpoint, GuestScripts.extractArchive(guestArchive, into: guestDirectory, os: endpoint.os),
-      operation: "unpack the copied files", timeout: timeout(for: data.count))
+    let output: CommandOutput
+    do {
+      output = try await checked(
+        endpoint, GuestScripts.extractArchive(guestArchive, into: guestDirectory, os: endpoint.os),
+        operation: "unpack the copied files", timeout: timeout(for: data.count))
+    } catch {
+      // The script deletes the archive itself only after a successful extraction.
+      await removeGuest([guestArchive], endpoint)
+      throw error
+    }
     return output.stdoutString.split(whereSeparator: \.isNewline).map(String.init)
   }
 
@@ -427,7 +434,11 @@ public actor ClipboardBridge {
         let sizes = try await checked(
           endpoint, GuestScripts.pathSizes(filePaths, os: endpoint.os), operation: "measure the guest files",
           timeout: .seconds(60))
-        let total = Int(sizes.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+        let reported = sizes.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Fail closed: an unknown size must never slip past the limit.
+        guard let total = Int(reported), total >= 0 else {
+          throw GuestTransportError.unexpectedOutput("file sizes: \(reported.prefix(80))")
+        }
         if total > maxBytes { throw GuestTransportError.tooLarge(bytes: total, limit: maxBytes) }
       }
       pruneHostStaging(keeping: options.stagingFoldersToKeep - 1)
@@ -501,6 +512,15 @@ public actor ClipboardBridge {
     guard output.succeeded else {
       if endpoint.os == .linux, output.status == GuestScripts.linuxUnsupportedStatus {
         throw GuestTransportError.unsupported(output.diagnostic)
+      }
+      // Failures printed by `tart exec` / `ssh` themselves: the command never reached the guest.
+      if let reason = GuestProbe.transportReason(for: output.diagnostic) {
+        throw GuestTransportError.unreachable(reason)
+      }
+      if endpoint.transport is SSHTransport, output.status == 255,
+        let reason = GuestProbe.sshReason(for: output.diagnostic)
+      {
+        throw GuestTransportError.unreachable(reason)
       }
       throw GuestTransportError.commandFailed(
         status: output.status,

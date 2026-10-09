@@ -142,22 +142,33 @@ public enum GuestScripts {
       """#, paths, os: os)
   }
 
-  /// Keeps the `keep` most recently modified staging folders in `root` and removes older ones.
+  /// Keeps the `keep` most recently modified staging folders in `root` and removes older ones, and
+  /// likewise keeps only the `keep` newest transfer archives (`<UUID>.tgz`) left behind by
+  /// interrupted transfers.
   ///
-  /// Scoped tightly: only direct children of `root` named like a UUID (the folders the bridge
-  /// creates) are candidates, and nothing happens unless `root` is a Tartelette staging folder.
+  /// Scoped tightly: only direct children of `root` named like a UUID (the folders and archives
+  /// the bridge creates) are candidates, and nothing happens unless `root` is a Tartelette staging
+  /// folder.
   public static func pruneStaging(_ root: String, keep: Int, os: VMOperatingSystem) -> [String] {
     shell(
       #"""
       r=$(x "$1"); keep=$2
       case "$r" in *[Tt]artelette*) ;; *) exit 0 ;; esac
       [ -d "$r" ] || exit 0
-      i=0
+      i=0; j=0
       ls -1t "$r" 2>/dev/null | while IFS= read -r e; do
-        case "$e" in ????????-????-????-????-????????????) ;; *) continue ;; esac
-        [ -d "$r/$e" ] || continue
-        i=$((i + 1))
-        [ "$i" -gt "$keep" ] && rm -rf "$r/$e"
+        case "$e" in
+          ????????-????-????-????-????????????)
+            [ -d "$r/$e" ] || continue
+            i=$((i + 1))
+            [ "$i" -gt "$keep" ] && rm -rf "$r/$e"
+            ;;
+          ????????-????-????-????-????????????.tgz)
+            [ -f "$r/$e" ] || continue
+            j=$((j + 1))
+            [ "$j" -gt "$keep" ] && rm -f "$r/$e"
+            ;;
+        esac
       done
       exit 0
       """#, [root, String(max(0, keep))], os: os)
@@ -169,7 +180,7 @@ public enum GuestScripts {
     shell(
       #"""
       a=$(x "$1"); d=$(x "$2"); t="$d/.tartelette-$$"
-      mkdir -p "$t" && tar -xzf "$a" -C "$t" || { rm -rf "$t"; exit 1; }
+      mkdir -p "$t" && tar -xzf "$a" -C "$t" || { rm -rf "$t"; rm -f "$a"; exit 1; }
       rm -f "$a"
       for e in "$t"/* "$t"/.[!.]*; do
         [ -e "$e" ] || continue

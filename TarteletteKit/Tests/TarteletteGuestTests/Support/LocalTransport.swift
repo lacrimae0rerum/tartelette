@@ -90,6 +90,7 @@ final class ControllableTransport: GuestTransport, @unchecked Sendable {
   private var _maxInFlight = 0
   private var _heavyCount = 0
   private var _failWhen: (@Sendable ([String]) -> Bool)?
+  private var _unreachableWhen: (@Sendable ([String]) -> Bool)?
 
   init(wrapping inner: any GuestTransport) {
     self.inner = inner
@@ -107,6 +108,12 @@ final class ControllableTransport: GuestTransport, @unchecked Sendable {
     get { lock.withLock { _failWhen } }
     set { lock.withLock { _failWhen = newValue } }
   }
+  /// Commands for which the guest is reported unreachable (as `tart exec` prints it), while other
+  /// commands still go through.
+  var unreachableWhen: (@Sendable ([String]) -> Bool)? {
+    get { lock.withLock { _unreachableWhen } }
+    set { lock.withLock { _unreachableWhen = newValue } }
+  }
   var maxConcurrentHeavyCommands: Int { lock.withLock { _maxInFlight } }
   var heavyCommandCount: Int { lock.withLock { _heavyCount } }
 
@@ -116,6 +123,11 @@ final class ControllableTransport: GuestTransport, @unchecked Sendable {
 
   func run(_ command: [String], standardInput: Data?, timeout: Duration?) async throws -> CommandOutput {
     guard isReachable else {
+      return CommandOutput(
+        status: 1,
+        stderr: Data("Failed to connect to the VM using its control socket: x, is the Tart Guest Agent running?".utf8))
+    }
+    if let unreachableWhen, unreachableWhen(command) {
       return CommandOutput(
         status: 1,
         stderr: Data("Failed to connect to the VM using its control socket: x, is the Tart Guest Agent running?".utf8))

@@ -29,9 +29,13 @@ public enum GuestTransportError: Error, Sendable, Equatable, LocalizedError {
   case integrityCheckFailed(String)
   /// A payload exceeded the configured limit.
   case tooLarge(bytes: Int, limit: Int)
+  /// The command never reached the guest (agent missing, VM stopped, SSH unreachable). Transient:
+  /// retrying later can succeed.
+  case unreachable(String)
 
   public var errorDescription: String? {
     switch self {
+    case .unreachable(let reason): reason
     case .commandFailed(let status, let message):
       message.isEmpty ? "The guest command failed with exit code \(status)." : message
     case .unexpectedOutput(let detail): "The guest returned unexpected output: \(detail)"

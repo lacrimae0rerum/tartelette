@@ -4,6 +4,25 @@ import Foundation
 /// Converts between `NSPasteboard` contents and `ClipboardPayload`.
 @MainActor
 public enum PasteboardCodec {
+  /// A cheap signature of what the pasteboard holds right now: every item's types, the size of
+  /// each flavour the bridge moves, and file URLs. Contents aren't hashed.
+  ///
+  /// Writers clear a pasteboard (which bumps `changeCount`) and then add items (which doesn't), so
+  /// the change count alone can't tell a finished write from one in progress; two equal shapes a
+  /// poll apart can. An empty pasteboard has an empty shape.
+  public static func shape(_ pasteboard: NSPasteboard = .general) -> String {
+    guard let items = pasteboard.pasteboardItems, !items.isEmpty else { return "" }
+    return items.map { item in
+      item.types.map { type -> String in
+        if type == .fileURL { return "file=" + (item.string(forType: .fileURL) ?? "") }
+        if ClipboardRepresentation.supportedTypes.contains(type.rawValue) {
+          return "\(type.rawValue)=\(item.data(forType: type)?.count ?? -1)"
+        }
+        return type.rawValue
+      }.joined(separator: ",")
+    }.joined(separator: "|")
+  }
+
   /// Captures the transferable contents of a pasteboard, or nil when it holds nothing supported.
   ///
   /// File URLs win over other flavours (Finder also adds icons and names, which aren't useful
