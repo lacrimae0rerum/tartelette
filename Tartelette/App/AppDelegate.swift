@@ -8,12 +8,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   private let dockTile = DockTileController()
 
   func applicationDidFinishLaunching(_ notification: Notification) {
+    // Two copies (say, one in /Applications and a development build) would both poll the VMs and
+    // run live clipboard sync against the same guests, overwriting each other's transfers.
+    if let other = Self.otherRunningInstance() {
+      other.activate()
+      NSApp.terminate(nil)
+      return
+    }
     model.onDockStateChange = { [weak self] in self?.updateDock() }
     model.start()
     updateDock()
     #if DEBUG
     DebugSnapshot.scheduleIfRequested(model: model)
     #endif
+  }
+
+  /// Another running copy of this app (same bundle identifier, any location), if any.
+  static func otherRunningInstance() -> NSRunningApplication? {
+    // XCTest launches the app as its test host next to any copy already running.
+    guard ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil,
+      let identifier = Bundle.main.bundleIdentifier
+    else { return nil }
+    let current = NSRunningApplication.current
+    return NSRunningApplication.runningApplications(withBundleIdentifier: identifier)
+      .first { $0.processIdentifier != current.processIdentifier && !$0.isTerminated }
   }
 
   func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
