@@ -223,6 +223,7 @@ func normalizePDF(at url: URL) throws {
   // `-05'30'`), so this replacement keeps the byte length in every zone.
   text = text.replacingOccurrences(
     of: #"D:\d{14}(?:Z|[+-])\d{2}'\d{2}'"#, with: "D:20260101000000Z00'00'", options: .regularExpression)
+  text = pinProducer(in: text)
   guard let trailer = text.range(of: "trailer", options: .backwards) else {
     guard let normalized = text.data(using: .isoLatin1) else { throw BrandKitError.write(url) }
     try normalized.write(to: url)
@@ -238,6 +239,44 @@ func normalizePDF(at url: URL) throws {
   text = String(text[..<trailer.lowerBound]) + tail
   guard let normalized = text.data(using: .isoLatin1) else { throw BrandKitError.write(url) }
   try normalized.write(to: url)
+}
+
+/// Quartz writes the host's macOS version and build into `/Producer`, so the same artwork would
+/// differ from one Mac to the next. Replace it with a fixed producer and shift the cross-reference
+/// offsets that point past it. Works on UTF-16 offsets, which equal byte offsets for Latin-1 text.
+func pinProducer(in text: String) -> String {
+  let pdf = NSMutableString(string: text)
+  // A PDF literal string, possibly with escaped characters such as `\(` and `\)`.
+  let producer = try! NSRegularExpression(pattern: #"/Producer \((?:\\.|[^\\)])*\)"#)
+  guard let found = producer.firstMatch(in: pdf as String, range: NSRange(location: 0, length: pdf.length)) else {
+    return text
+  }
+  let replacement = "/Producer (Tartelette BrandKit)"
+  let delta = (replacement as NSString).length - found.range.length
+  pdf.replaceCharacters(in: found.range, with: replacement)
+  guard delta != 0 else { return pdf as String }
+
+  // Only the classic cross-reference table: fixed-width "0000001234 00000 n" entries.
+  let xref = pdf.range(of: "\nxref\n", options: .backwards)
+  let trailer = pdf.range(of: "trailer", options: .backwards)
+  if xref.location != NSNotFound, trailer.location != NSNotFound, xref.location < trailer.location {
+    let table = NSRange(location: xref.location, length: trailer.location - xref.location)
+    let entry = try! NSRegularExpression(pattern: #"(?m)^(\d{10}) \d{5} n"#)
+    for match in entry.matches(in: pdf as String, range: table).reversed() {
+      let offsetRange = match.range(at: 1)
+      let offset = Int(pdf.substring(with: offsetRange))!
+      if offset > found.range.location {
+        pdf.replaceCharacters(in: offsetRange, with: String(format: "%010d", offset + delta))
+      }
+    }
+  }
+  let startxref = try! NSRegularExpression(pattern: #"startxref\s+(\d+)"#)
+  if let match = startxref.matches(in: pdf as String, range: NSRange(location: 0, length: pdf.length)).last {
+    let valueRange = match.range(at: 1)
+    let value = Int(pdf.substring(with: valueRange))!
+    if value > found.range.location { pdf.replaceCharacters(in: valueRange, with: String(value + delta)) }
+  }
+  return pdf as String
 }
 
 enum BrandKitError: Error { case write(URL) }

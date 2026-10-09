@@ -383,7 +383,9 @@ private struct NetworkOptionsSection: View {
     let mode = NetworkMode(options.network)
 
     Section {
-      Picker(selection: Binding(get: { mode }, set: select)) {
+      // A closure, not `set: select`: the Swift 6.2/6.3 compilers in Xcode 26 crash emitting the
+      // @isolated(any) thunk for a method reference here.
+      Picker(selection: Binding(get: { mode }, set: { select($0) })) {
         ForEach(NetworkMode.allCases) { candidate in
           Text(candidate.title)
             .tag(candidate)

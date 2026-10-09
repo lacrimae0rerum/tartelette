@@ -1,115 +1,363 @@
+<p align="center">
+  <img src="docs/banner.png" width="900" alt="Welcome to Tartelette: crea tu primera máquina virtual con macOS Tahoe, macOS Sequoia con Xcode o Ubuntu, desde un IPSW, como VM Linux vacía o importándola">
+</p>
+
 # Tartelette
 
-A native macOS companion app for [Tart](https://tart.run): create, run, configure, share and
-monitor Tart virtual machines without the terminal — with live performance metrics and a
-clipboard that really works in both directions (text, rich text, images and files).
+**Español** · [English](README.en.md)
 
-Tartelette drives the `tart` executable you already have installed, so everything it does is
-exactly what the CLI does. Every sheet shows the equivalent `tart …` command, ready to copy.
+[![Última versión](https://img.shields.io/github/v/release/lacrimae0rerum/tartelette?label=versi%C3%B3n)](https://github.com/lacrimae0rerum/tartelette/releases/latest)
+[![CI](https://github.com/lacrimae0rerum/tartelette/actions/workflows/ci.yml/badge.svg)](https://github.com/lacrimae0rerum/tartelette/actions/workflows/ci.yml)
+![macOS 14+ · Apple silicon](https://img.shields.io/badge/macOS-14%2B%20%C2%B7%20Apple%20silicon-000000?logo=apple)
+[![Licencia MIT](https://img.shields.io/github/license/lacrimae0rerum/tartelette?label=licencia)](LICENSE)
 
-## Quick path
+Una app nativa de macOS para [Tart](https://tart.run): crea, arranca, configura, comparte y
+vigila máquinas virtuales de Tart sin abrir la terminal, con métricas de rendimiento en vivo y
+un portapapeles que funciona de verdad en los dos sentidos (texto, texto enriquecido, imágenes y
+archivos).
 
-1. Install Tart: `brew install openai/tools/tart`
-2. Build and install the app: `make install` (or `make run` to just try it)
-3. Open **Tartelette**, press **⌘N**, pick *macOS Tahoe* (or *Ubuntu*) and click **Download & Create**.
-4. Select the VM and press **⌘R**. Copy something on your Mac — it's already on the VM's clipboard.
+Tartelette usa el ejecutable `tart` que ya tienes instalado, así que todo lo que hace es
+exactamente lo que hace la línea de comandos. Cada hoja muestra el comando `tart …` equivalente,
+listo para copiar.
 
-Requirements: Apple silicon, macOS 14 or later, Tart 2.x. Building needs Xcode 16 or later.
+![El panel de Tartelette: la bienvenida con las imágenes listas para descargar y las métricas de este Mac en vivo](docs/screenshots/dashboard-welcome.png)
 
-## What you can do
+## Requisitos
 
-| Area | In the app | Tart equivalent |
-|------|------------|-----------------|
-| Create | New VM from a Cirrus Labs image, macOS IPSW (latest/file/URL), empty Linux VM, `.tvm` import | `clone`, `create --from-ipsw`, `create --linux`, `import` |
-| Run | Start in a window, headless, with VNC (Screen Sharing or built-in), in Recovery, or with any saved run options | `run` and all its flags |
-| Control | Request shutdown (graceful), power off, suspend, force quit, show the VM window | `SIGUSR2`, `stop`, `suspend` |
-| Configure | CPU, memory, display (pt/px, refit), grow or replace the disk, new MAC/serial | `set` |
-| Run options | Network (shared, bridged, Softnet allow/block/expose, host-only), shared folders, extra disks (image, cached VM, NBD), root disk caching/sync, Rosetta, nested virtualization, serial console, audio/USB/clipboard/input devices, first-boot provisioning | `run --net-* --dir --disk --root-disk-opts --rosetta --nested --serial …` |
-| Access | IP address (DHCP, ARP or guest agent), Terminal shell in the guest, SSH, one-shot console | `ip`, `exec -it`, `exec` |
-| Share | Push to registries (labels, chunked uploads, multiple tags), pull, export `.tvm`, clone, rename, delete | `push`, `pull`, `export`, `clone`, `rename`, `delete` |
-| Registries | Log in/out; see Keychain, Docker config and environment credentials | `login --password-stdin`, `logout` |
-| Storage | TART_HOME usage, per-VM allocation, cache breakdown, prune by age/budget/GC | `prune` |
-| Monitor | Host CPU, memory, pressure, swap, thermal state; per-VM CPU (guest vs Tart), memory, disk I/O and power; guest CPU, load, memory, disk and uptime | — |
+| | Requisito | Detalles |
+|---|---|---|
+| **Mac** | Apple silicon (M1 o posterior) | Los Mac con Intel no son compatibles: Tart solo funciona en Apple silicon y la app se distribuye solo para `arm64` (en un Mac con Intel, macOS indica que no es compatible con ese tipo de Mac). |
+| **macOS** | macOS 14 Sonoma o posterior | Probado en macOS 26.7 (Tahoe) y en macOS 14.8 (Sonoma). En macOS 14, Tart se instala desde su descarga oficial y no con Homebrew (ver [Instala Tart](#1-instala-tart)), y la red Softnet no está disponible. |
+| **Tart** | 2.27 o posterior | El puente de portapapeles, la consola y las métricas del invitado usan `tart exec`, que llegó en Tart 2.27.0. Probado con Tart 2.40.1. |
+| **Máquinas virtuales** | macOS y Linux (`arm64`) | Apple permite como máximo dos VM de macOS en marcha a la vez. |
+| **Dentro de la VM** | Tart Guest Agent | Necesario para el portapapeles, la consola y las métricas del invitado. Viene preinstalado en las imágenes de Cirrus Labs `*-base`, `*-xcode` y Linux. En macOS, el portapapeles necesita además una sesión de usuario iniciada; en Linux, un escritorio con `wl-clipboard` o `xclip`/`xsel`. |
+| **Compilar** (opcional) | Xcode 26 o posterior | Solo si quieres compilarla tú: consulta [Compilar desde el código fuente](#compilar-desde-el-código-fuente). |
 
-Everywhere else: menu bar extra with live VM states, Dock badge (running VMs), Dock menu, Dock
-progress for downloads, notifications when long jobs finish, keyboard shortcuts for every action.
+## Instalación
 
-## Copy and paste between Mac and VM
+### 1. Instala Tart
 
-Tart's built-in clipboard sharing (SPICE) is text-only, and on macOS guests the agent can replace
-rich content on your Mac with plain text. Tartelette adds its own **clipboard bridge**:
+**macOS 15 o posterior**, con [Homebrew](https://brew.sh):
+
+```bash
+brew trust --formula openai/tools/tart openai/tools/softnet
+brew install openai/tools/tart
+```
+
+Desde Homebrew 6, las fórmulas de repositorios de terceros hay que marcarlas como de confianza
+antes de instalarlas, y Tart depende de Softnet, que está en el mismo repositorio. Con solo
+`brew install openai/tools/tart` la instalación se detiene con «Refusing to load formula
+openai/tools/softnet from untrusted tap».
+
+**macOS 14 Sonoma**: la fórmula de Homebrew no se puede instalar (Softnet necesita macOS 15), así
+que instala Tart desde su descarga oficial:
+
+```bash
+curl -fL https://github.com/openai/tart/releases/latest/download/tart.tar.gz | tar -xz -C /Applications
+```
+
+Tartelette lo encuentra en `/Applications/tart.app`. Si no tienes Tart, la propia app te muestra
+el comando adecuado para tu versión de macOS, con un botón para ejecutarlo en Terminal.
+
+### 2. Descarga e instala Tartelette
+
+1. Descarga **`Tartelette-1.0.0.dmg`** desde la [última versión](https://github.com/lacrimae0rerum/tartelette/releases/latest).
+2. Ábrelo y arrastra **Tartelette** a la carpeta **Aplicaciones**. Ábrela siempre desde
+   Aplicaciones, no desde la imagen de disco.
+
+La versión incluye también `Tartelette-1.0.0.zip` (la misma app) y `SHA256SUMS.txt` para
+[comprobar la descarga](#comprobar-la-descarga).
+
+### 3. Ábrela por primera vez
+
+Tartelette **no está notarizada por Apple**. Notarizar una app exige firmarla con un Developer ID
+del Apple Developer Program (de pago); esta app se publica con una firma local («ad hoc») y con el
+hardened runtime activado. Por eso, la primera vez que abres una copia descargada con el
+navegador, macOS la bloquea. Es lo esperado y solo hay que hacerlo una vez:
+
+1. Abre **Tartelette** desde Aplicaciones. macOS avisa de que no puede verificarla («Apple no ha
+   podido verificar que Tartelette no contenga software malicioso…»; en macOS 14, que es de un
+   desarrollador no identificado): cierra el aviso.
+2. Ve a **Ajustes del Sistema › Privacidad y seguridad**, baja hasta la sección **Seguridad** y
+   pulsa **Abrir igualmente** junto al mensaje sobre Tartelette. El botón aparece durante
+   aproximadamente una hora después de intentar abrirla.
+3. Confirma con **Abrir igualmente** y tu contraseña de inicio de sesión. A partir de ahí se abre
+   con normalidad.
+
+En macOS 14 también vale hacer clic en la app con la tecla Control pulsada y elegir **Abrir**.
+
+Si macOS dice que la app **«está dañada»** y no te deja abrirla, o prefieres la terminal, quita la
+marca de cuarentena que añade el navegador a lo descargado:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/Tartelette.app
+```
+
+Hazlo solo con copias descargadas de este repositorio, idealmente después de
+[comprobar la descarga](#comprobar-la-descarga). Si prefieres evitar este paso, tienes dos
+alternativas: [instalar desde la terminal](#instalar-desde-la-terminal) (lo que descarga `curl` no
+lleva marca de cuarentena) o [compilarla tú](#compilar-desde-el-código-fuente) (lo que compilas en
+tu Mac nunca la lleva).
+
+### Instalar desde la terminal
+
+```bash
+cd ~/Downloads
+curl -fLO https://github.com/lacrimae0rerum/tartelette/releases/download/v1.0.0/Tartelette-1.0.0.zip
+curl -fLO https://github.com/lacrimae0rerum/tartelette/releases/download/v1.0.0/SHA256SUMS.txt
+shasum -a 256 -c SHA256SUMS.txt --ignore-missing   # debe responder: Tartelette-1.0.0.zip: OK
+
+# Si tienes una versión anterior, ciérrala antes: esto la sustituye.
+rm -rf /Applications/Tartelette.app
+ditto -x -k Tartelette-1.0.0.zip /Applications
+open /Applications/Tartelette.app
+```
+
+### Comprobar la descarga
+
+Descarga también `SHA256SUMS.txt` a la misma carpeta y ejecuta:
+
+```bash
+cd ~/Downloads && shasum -a 256 -c SHA256SUMS.txt --ignore-missing
+```
+
+Cada archivo descargado debe aparecer con `OK`.
+
+### Actualizar
+
+Descarga la versión nueva y sustituye la app en Aplicaciones (o repite
+[la instalación desde la terminal](#instalar-desde-la-terminal) con la nueva versión). Los ajustes,
+los perfiles de arranque y las contraseñas guardadas se conservan. Como cada versión descargada es
+una copia nueva sin Developer ID, macOS vuelve a pedir el [paso del primer arranque](#3-ábrela-por-primera-vez)
+y, si guardaste contraseñas en Tartelette, puede pedirte una vez permiso para que la nueva versión
+las lea del llavero.
+
+### Desinstalar
+
+1. Si activaste **Open at login** (en **Settings › General**), desactívalo.
+2. Cierra Tartelette y mueve `/Applications/Tartelette.app` a la papelera.
+3. Opcional, para borrar también sus datos:
+
+   ```bash
+   rm -rf ~/Library/Application\ Support/Tartelette ~/Library/Caches/Tartelette ~/Library/Logs/Tartelette
+   defaults delete io.github.lacrimae0rerum.Tartelette
+   # Solo existen si guardaste contraseñas en Tartelette:
+   security delete-generic-password -s io.github.lacrimae0rerum.Tartelette.ssh
+   security delete-generic-password -s io.github.lacrimae0rerum.Tartelette.registry
+   ```
+
+Tus máquinas virtuales e imágenes están en `~/.tart` (o en `TART_HOME`): son de Tart y
+desinstalar Tartelette no las toca.
+
+## Primeros pasos
+
+1. Abre **Tartelette**, pulsa **⌘N**, elige *macOS Tahoe* (o *Ubuntu*) y pulsa **Download & Create**.
+2. Selecciona la VM y pulsa **⌘R**.
+3. Copia algo en tu Mac: ya está en el portapapeles de la VM. La primera vez, macOS puede pedirte
+   permiso para que Tartelette lea lo que copias (consulta [Permisos](#permisos-que-pide-macos)).
+
+## Qué puedes hacer
+
+| Área | En la app | Equivalente en Tart |
+|------|-----------|---------------------|
+| Crear | VM nueva desde una imagen de Cirrus Labs, desde un IPSW de macOS (el más reciente, un archivo o una URL), VM Linux vacía, importar un `.tvm` | `clone`, `create --from-ipsw`, `create --linux`, `import` |
+| Arrancar | En una ventana, sin ventana, con VNC (Compartir Pantalla o el integrado), en modo Recuperación o con cualquier opción de arranque guardada | `run` y todas sus opciones |
+| Controlar | Pedir el apagado (ordenado), apagar, suspender, forzar la salida, mostrar la ventana de la VM | `SIGUSR2`, `stop`, `suspend` |
+| Configurar | CPU, memoria, pantalla (pt/px, ajuste automático), ampliar o sustituir el disco, nueva MAC o número de serie | `set` |
+| Opciones de arranque | Red (compartida, puente, Softnet con allow/block/expose, solo host), carpetas compartidas, discos adicionales (imagen, VM en caché, NBD), caché y sincronización del disco raíz, Rosetta, virtualización anidada, consola serie, dispositivos de audio/USB/portapapeles/entrada, aprovisionamiento en el primer arranque | `run --net-* --dir --disk --root-disk-opts --rosetta --nested --serial …` |
+| Acceder | Dirección IP (DHCP, ARP o agente del invitado), shell del invitado en Terminal, SSH, consola de comandos | `ip`, `exec -it`, `exec` |
+| Compartir | Subir a registros (etiquetas, subida por partes, varios tags), descargar, exportar `.tvm`, clonar, renombrar, borrar | `push`, `pull`, `export`, `clone`, `rename`, `delete` |
+| Registros | Iniciar y cerrar sesión; ver las credenciales del llavero, de la configuración de Docker y del entorno | `login --password-stdin`, `logout` |
+| Almacenamiento | Uso de `TART_HOME`, espacio asignado por VM, desglose de la caché, limpieza por antigüedad, por tamaño máximo o GC | `prune` |
+| Monitorizar | Del Mac: CPU, memoria, presión de memoria, swap y estado térmico. Por VM: CPU (invitado frente a Tart), memoria, E/S de disco y consumo. Del invitado: CPU, carga, memoria, disco y tiempo encendido | — |
+
+Y además: icono en la barra de menús con el estado de las VM en vivo, globo en el Dock con las VM
+en marcha, menú del Dock, progreso de las descargas en el Dock, notificaciones cuando termina una
+tarea larga y atajos de teclado para cada acción. El menú **Help** enlaza con este repositorio,
+las notas de versión y la página para informar de problemas.
+
+## Capturas
+
+**Panel** — CPU, memoria, swap y estado térmico de este Mac, cada VM en marcha con su CPU,
+memoria y consumo en vivo, y cuánto espacio ocupan las VM y las cachés de Tart.
+
+![Panel con las métricas del Mac, la tarjeta de una VM en marcha y el desglose del almacenamiento](docs/screenshots/dashboard.png)
+
+**Una VM de macOS en marcha** — CPU, memoria, disco y consumo en vivo, el estado del agente del
+invitado y, detrás, la ventana de la propia VM.
+
+![Tartelette con una VM de macOS en marcha: CPU, memoria, disco y consumo en vivo, el estado del agente del invitado y la ventana de la VM detrás](docs/screenshots/vm-overview-macos.png)
+
+**Resumen de una VM** — una VM de Ubuntu sin ventana: indicadores en vivo, su configuración, la
+dirección IP (resuelta por DHCP, ARP o el agente del invitado), el estado del agente y los
+procesos del Mac que la mueven (`tart run` y el servicio de virtualización), con el comando
+exacto con el que se arrancó.
+
+![Resumen de una VM Linux en marcha con métricas, detalles, red, agente del invitado y procesos del Mac](docs/screenshots/vm-overview-linux.png)
+
+**Trabajando dentro de la VM** — el macOS invitado en la ventana de Tart junto a Tartelette. Con
+la sincronización en vivo activada (el botón naranja del portapapeles), lo que copias en un lado
+está listo para pegar en el otro.
+
+![La ventana de una VM de macOS delante de Tartelette, con Terminal abierta dentro del invitado](docs/screenshots/macos-vm-window.png)
+
+## Copiar y pegar entre el Mac y la VM
+
+El portapapeles compartido que trae Tart (SPICE) solo copia texto, y en los invitados macOS el
+agente puede sustituir el contenido enriquecido de tu Mac por texto sin formato. Tartelette añade
+su propio **puente de portapapeles**:
 
 | | Tartelette Bridge | Tart (SPICE) |
 |---|---|---|
-| Content | Text, RTF, HTML, PNG/TIFF images, files and folders | Plain text |
-| Direction | Both, live (or one-way, or manual) | Both |
-| Needs | Tart Guest Agent (Cirrus `*-base`, `*-xcode`, Linux images) | Guest agent / `spice-vdagent` |
+| Contenido | Texto, RTF, HTML, imágenes PNG/TIFF, archivos y carpetas | Texto sin formato |
+| Sentido | Los dos, en vivo (o en un solo sentido, o manual) | Los dos |
+| Necesita | Tart Guest Agent (imágenes `*-base`, `*-xcode` y Linux de Cirrus Labs) | Agente del invitado o `spice-vdagent` |
 
-How it works: Tartelette watches your Mac's pasteboard and polls the guest's through
-`tart exec`, moves every payload with a SHA-256 check (falling back to verified 128 KiB chunks
-when a transfer is corrupted — see tart#1347), and remembers what it wrote on each side so
-nothing echoes back. Copied files are staged in the guest and placed on its pasteboard, so
-**⌘V in Finder pastes them**. You can also drop files on a VM to copy them to its Desktop.
+Cómo funciona: Tartelette vigila el portapapeles de tu Mac y consulta el de la VM mediante
+`tart exec`, mueve cada contenido con una comprobación SHA-256 (si una transferencia llega
+corrupta, la repite en bloques verificados de 128 KiB; consulta tart#1347) y recuerda lo que ha
+escrito en cada lado para que nada vuelva de rebote. Los archivos copiados se preparan en la VM y
+se colocan en su portapapeles, así que **⌘V en el Finder los pega**. También puedes soltar
+archivos sobre una VM para copiarlos a su escritorio.
 
-Pick the engine per VM in **Run Options → Clipboard & Address** (or **Clipboard & Files →
-Change…**): *Automatic* (bridge for macOS guests, SPICE for Linux), *Tartelette Bridge*,
-*Tart (SPICE)* or *Off*. With the bridge, VMs start with
-`--no-clipboard` so the two mechanisms never fight.
+Elige el mecanismo para cada VM en **Run Options › Clipboard & Address** (o con **Change…** en la
+pestaña **Clipboard & Files**): *Automatic* (el puente para invitados macOS y SPICE para Linux),
+*Tartelette Bridge*, *Tart (SPICE)* u *Off*. Con el puente, las VM arrancan con `--no-clipboard`
+para que los dos mecanismos nunca choquen. La sincronización en vivo se activa sola al arrancar
+una VM; puedes cambiarlo en **Settings › Clipboard › Turn on live sync when a VM starts**.
 
-Linux guests need a desktop session plus `wl-clipboard` or `xclip`/`xsel`; the Cirrus Labs
-server images have no desktop, so the bridge reports clipboard as unavailable there (file
-transfer, console and metrics still work).
+Los invitados Linux necesitan una sesión de escritorio y `wl-clipboard` o `xclip`/`xsel`. Las
+imágenes de servidor de Cirrus Labs no tienen escritorio, así que ahí el puente indica que el
+portapapeles no está disponible (la transferencia de archivos, la consola y las métricas siguen
+funcionando).
 
-Good to know:
+**Permiso de macOS para leer el portapapeles.** Desde macOS 15.4, macOS puede preguntar (o
+negarse) antes de que una app lea lo que copias en otras apps. La sincronización en vivo lee el
+portapapeles del Mac cada vez que copias algo, así que permite Tartelette en **Ajustes del
+Sistema › Privacidad y seguridad › Pegar desde otras apps**. Si macOS está configurado para
+preguntar o denegar, la pestaña **Clipboard & Files** de la VM lo avisa y ofrece el botón
+**Open Settings…**, que abre ese ajuste.
 
-- A change is synced once it has settled: half-written clipboards (an app still adding items)
-  and file items their app hasn't handed over yet are retried instead of sent partially.
-- For 10 seconds after a sync, a copy of *some* of the just-synced files counts as an echo and
-  isn't sent back. Copy them again after that window if you meant it.
-- Only one Tartelette runs at a time: launching a second copy brings the first one forward, so
-  two copies never sync the same VM against each other.
+Conviene saber:
 
-## Build from source
+- Un cambio se sincroniza cuando se ha asentado: los portapapeles a medio escribir (una app que
+  aún está añadiendo elementos) y los archivos que su app todavía no ha entregado se reintentan en
+  lugar de enviarse a medias.
+- Durante los 10 segundos posteriores a una sincronización, copiar *parte* de los archivos recién
+  sincronizados se considera un rebote y no se devuelve. Si lo hacías a propósito, vuelve a
+  copiarlos pasado ese tiempo.
+- Solo funciona una copia de Tartelette a la vez: si abres una segunda, se cierra y trae al frente
+  la primera, para que nunca haya dos copias sincronizando la misma VM entre sí.
+
+## Permisos que pide macOS
+
+| Cuándo | Qué pide macOS | Qué hacer |
+|--------|----------------|-----------|
+| La primera vez que abres una copia descargada | La bloquea Gatekeeper (la app no está notarizada) | [Ábrela por primera vez](#3-ábrela-por-primera-vez) |
+| Al sincronizar el portapapeles en vivo (macOS 15.4 o posterior) | Permiso para leer lo que copias en otras apps | **Ajustes del Sistema › Privacidad y seguridad › Pegar desde otras apps** → permite Tartelette |
+| La primera vez que lanzas una tarea larga (crear, clonar, descargar o subir una VM…) | Permiso para enviar notificaciones (avisan cuando termina) | Opcional; se desactiva en **Settings › General › Notify when long operations finish** |
+| Al activar Softnet | Contraseña de administrador, una sola vez | **Settings › Registries & Network › Allow Softnet to Run…** |
+| Después de actualizar, si guardaste contraseñas | Puede pedir acceso al llavero | Permítelo para que la nueva versión lea sus contraseñas |
+
+## Privacidad
+
+- **No se conecta a internet por su cuenta.** La app no contiene código de red: no hay
+  telemetría, analítica ni comprobación de actualizaciones. El tráfico de red lo genera `tart`
+  (al descargar, subir o iniciar sesión en registros), `ssh` hacia tus VM cuando usas ese
+  respaldo, y los enlaces que abres en el navegador.
+- **El portapapeles no sale de tu Mac.** Va entre el Mac y tus VM locales mediante `tart exec`
+  (o SSH). Las transferencias se preparan en `~/Library/Caches/Tartelette/Clipboard`.
+- **Contraseñas.** La contraseña de **Registries › Log In** se le pasa a `tart login
+  --password-stdin` por la entrada estándar y Tartelette no la guarda (la guarda Tart). La
+  contraseña de respaldo para SSH y las credenciales opcionales de **Settings › Registries &
+  Network** se guardan en el llavero de macOS; llegan a `ssh` a través de un asistente askpass y
+  a `tart` como variables `TART_REGISTRY_*`, nunca como argumentos de la línea de comandos.
+- **Sin sandbox, a propósito.** La app tiene que ejecutar `tart`, leer `~/.tart` e inspeccionar
+  los procesos de las VM para medir su consumo, cosas que el sandbox de macOS no permite.
+
+## Compilar desde el código fuente
+
+Necesitas un Mac con Apple silicon y **Xcode 26 o posterior** (probado con Xcode 27.0), que a su
+vez necesita macOS 15.6 o posterior ([requisitos de Xcode](https://developer.apple.com/xcode/system-requirements/)).
+La app compilada funciona desde macOS 14. El proyecto usa ajustes de compilación que llegaron con Xcode 26 (aislamiento
+`MainActor` por defecto y *approachable concurrency*) y un icono de Icon Composer (`.icon`), así
+que las versiones anteriores de Xcode no pueden compilarlo. La integración continua compila la app y
+pasa todos los tests con Xcode 26.0.1 y 26.6. No tiene
+dependencias de terceros.
+
+`xcodebuild` necesita Xcode completo (no basta con las Command Line Tools). Si `make` se queja,
+selecciónalo:
 
 ```bash
-make test      # TarteletteKit unit tests (Swift Testing)
-make build     # Release build → build/Tartelette.app
-make install   # copies the app to /Applications
-make assets    # regenerates the icon, menu bar icons and brand mark
-make open      # opens the Xcode project
+sudo xcode-select -s /Applications/Xcode.app
 ```
 
-The app is ad-hoc signed ("Sign to Run Locally") and not sandboxed: it must run `tart`, read
-`~/.tart` and inspect VM processes.
-
-## How it's built
-
-```
-Tartelette/
-  Tartelette.xcodeproj      app target (synchronized folder, local package dependency)
-  Tartelette/               SwiftUI app: App/, Stores/, Features/, Components/, Support/
-  TarteletteKit/            Swift package, no third-party dependencies
-    TarteletteCore          domain: VM models, typed tart commands, parsers, ports
-    TarteletteCLI           adapter: runs tart, streams progress, launches VMs, Keychain, Softnet
-    TarteletteMetrics       adapter: host + per-VM process metrics, storage usage
-    TarteletteGuest         adapter: tart exec/SSH transports, clipboard bridge, guest metrics
-  Tools/BrandKit            code-drawn Liquid Glass app icon and menu bar icons
+```bash
+git clone https://github.com/lacrimae0rerum/tartelette.git
+cd tartelette
+make test       # tests de TarteletteKit y de la app
+make run        # compila la versión Release en build/Tartelette.app y la abre
+make install    # la copia a /Applications (cambia la carpeta con INSTALL_DIR=…)
 ```
 
-| Topic | Decision |
-|-------|----------|
-| Source of truth | The `tart` binary. Polling uses `tart list --format json` plus each VM's `config.json`, never `tart get` (it changes access dates used by `prune`). |
-| Running VMs | `tart run` is spawned in its own session with output in `~/Library/Logs/Tartelette/<vm>.log`, so VMs keep running if the app quits. The running PID comes from Tart's `fcntl` lock on `config.json`, so VMs started from Terminal are controlled the same way. |
-| Progress | Tart runs with `CI=1` (plain `N%` lines) and a PATH that includes Homebrew, so Softnet and Docker credential helpers are found. Cancelling sends `SIGINT`, which makes Tart clean up. |
-| Per-VM metrics | Each VM runs in a `com.apple.Virtualization.VirtualMachine` XPC process; it's matched to its VM by the disk and NVRAM files it holds open. CPU time from `proc_pid_rusage` is converted from Mach ticks; power comes from the kernel's energy counter. |
-| Secrets | Registry passwords go to Tart via stdin only and are never kept. SSH fallback passwords live in the Keychain and reach `ssh` through an askpass helper, never argv. |
+| Comando | Qué hace |
+|---------|----------|
+| `make test` | Ejecuta los tests de TarteletteKit (Swift Testing) y los de la app |
+| `make build` | Compila la versión Release en `build/Tartelette.app` |
+| `make run` | Compila y abre la app |
+| `make install` | Compila y la instala en `/Applications` sustituyendo la anterior de forma atómica (`INSTALL_DIR=…` para otra carpeta) |
+| `make uninstall` | Borra la app instalada |
+| `make package` | Genera `dist/Tartelette-<versión>.dmg`, `.zip` y `SHA256SUMS.txt` a partir de la versión Release |
+| `make release` | Todo lo necesario para publicar, en orden: `check-assets`, `test` y `package` |
+| `make assets` | Regenera el icono de la app, los iconos de la barra de menús y el logotipo |
+| `make check-assets` | Comprueba que los recursos de marca guardados coinciden con su generador |
+| `make open` | Abre el proyecto en Xcode |
+| `make clean` | Borra `build/`, `dist/` y la caché de compilación del paquete |
 
-## Troubleshooting
+Lo que compilas en tu Mac se firma de forma local («ad hoc») para `arm64` y no lleva marca de
+cuarentena, así que se abre sin el paso de Gatekeeper.
 
-| Symptom | Fix |
-|---------|-----|
-| "Tart isn't installed" | Install Tart or choose the binary in **Settings → General**. |
-| Clipboard says the guest agent is unavailable | Use a `*-base`/`*-xcode` image, or install `tart-guest-agent` in the guest; make sure a user is logged in. |
-| Softnet networking fails | **Settings → Registries & Network → Allow Softnet to Run…** (one-time administrator prompt). |
-| A third macOS VM won't start | Apple allows two macOS guests at a time. |
-| Exec/agent features fail with a source-built Tart | Source builds report `SNAPSHOT`, which the macOS guest agent rejects; use a released Tart. |
+## Cómo está hecha
+
+```
+Tartelette.xcodeproj        target de la app (carpeta sincronizada, dependencia de paquete local)
+Tartelette/                 app SwiftUI: App/, Stores/, Features/, Components/, Support/
+TarteletteTests/            tests de la app
+TarteletteKit/              paquete Swift, sin dependencias de terceros
+  TarteletteCore            dominio: modelos de VM, comandos de tart tipados, parsers, puertos
+  TarteletteCLI             adaptador: ejecuta tart, transmite el progreso, arranca VM, llavero, Softnet
+  TarteletteMetrics         adaptador: métricas del Mac y de cada VM, uso del almacenamiento
+  TarteletteGuest           adaptador: transportes tart exec/SSH, puente de portapapeles, métricas del invitado
+Tools/BrandKit              icono Liquid Glass de la app e iconos de la barra de menús dibujados por código
+```
+
+| Tema | Decisión |
+|------|----------|
+| Fuente de verdad | El binario `tart`. El refresco usa `tart list --format json` y el `config.json` de cada VM, nunca `tart get` (cambia las fechas de acceso que usa `prune`). |
+| VM en marcha | `tart run` se lanza en su propia sesión y escribe su salida en `~/Library/Logs/Tartelette/<vm>.log`, así que las VM siguen en marcha si cierras la app. El PID se obtiene del bloqueo `fcntl` de Tart sobre `config.json`, de modo que las VM arrancadas desde la terminal se controlan igual. |
+| Progreso | Tart se ejecuta con `CI=1` (líneas `N%` simples) y con un `PATH` que incluye Homebrew, para que encuentre Softnet y los asistentes de credenciales de Docker. Cancelar envía `SIGINT`, con lo que Tart limpia lo que deja a medias. |
+| Métricas por VM | Cada VM se ejecuta en un proceso XPC `com.apple.Virtualization.VirtualMachine`, que se asocia a su VM por los archivos de disco y NVRAM que tiene abiertos. El tiempo de CPU de `proc_pid_rusage` se convierte desde ticks de Mach; el consumo sale del contador de energía del kernel. |
+| Secretos | La contraseña de **Registries › Log In** llega a Tart solo por la entrada estándar y Tartelette no la guarda. Las contraseñas de respaldo para SSH viven en el llavero y llegan a `ssh` mediante un asistente askpass, nunca por argumentos. |
+
+## Solución de problemas
+
+| Síntoma | Solución |
+|---------|----------|
+| macOS no deja abrir Tartelette o dice que «está dañada» | La app no está notarizada: sigue [Ábrela por primera vez](#3-ábrela-por-primera-vez) o quita la cuarentena con `xattr -dr com.apple.quarantine /Applications/Tartelette.app`. |
+| macOS indica que la app no es compatible con este tipo de Mac | Es un Mac con Intel. Tart y Tartelette solo funcionan en Apple silicon. |
+| macOS pregunta cada vez que copias algo, o no llega nada del Mac a la VM | Permite Tartelette en **Ajustes del Sistema › Privacidad y seguridad › Pegar desde otras apps** (el botón **Open Settings…** de la pestaña **Clipboard & Files** lleva ahí). |
+| «Tart isn't installed» | Instala Tart (ver [Instala Tart](#1-instala-tart)) o elige su ejecutable con **Locate tart…** o en **Settings › General**. |
+| `brew install openai/tools/tart` dice «Refusing to load formula … from untrusted tap» | Homebrew 6 o posterior: ejecuta antes `brew trust --formula openai/tools/tart openai/tools/softnet`. |
+| Homebrew dice «softnet: This formula does not run on macOS versions older than Sequoia» | Estás en macOS 14: instala Tart desde su [descarga oficial](#1-instala-tart). |
+| El portapapeles dice que el agente del invitado no está disponible | Usa una imagen `*-base`/`*-xcode` o instala `tart-guest-agent` en el invitado, y comprueba que hay una sesión de usuario iniciada. |
+| La red Softnet falla | **Settings › Registries & Network › Allow Softnet to Run…** (pide la contraseña de administrador una vez). |
+| Una tercera VM de macOS no arranca | Apple permite dos invitados macOS a la vez. |
+| Las funciones de exec o del agente fallan con un Tart compilado por ti | Las compilaciones desde el código fuente se identifican como `SNAPSHOT`, versión que el agente de macOS rechaza; usa una versión publicada de Tart. |
+
+¿Algo más? [Abre una incidencia](https://github.com/lacrimae0rerum/tartelette/issues) (o usa
+**Help › Report an Issue…** en la app).
+
+## Licencia
+
+Tartelette se distribuye con la [licencia MIT](LICENSE). Tart es un proyecto independiente con su
+propia licencia; Tartelette no contiene código de Tart y usa el `tart` que tengas instalado.

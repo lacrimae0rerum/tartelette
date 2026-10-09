@@ -12,8 +12,8 @@ final class AppSettings {
   private let defaults: UserDefaults
   private let secrets: any SecretStore
 
-  static let sshService = "dev.tartelette.ssh"
-  static let registryService = "dev.tartelette.registry"
+  static let sshService = "io.github.lacrimae0rerum.Tartelette.ssh"
+  static let registryService = "io.github.lacrimae0rerum.Tartelette.registry"
 
   // MARK: General
 

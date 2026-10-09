@@ -251,15 +251,13 @@ enum TestFiles {
   /// Deterministic pseudo-random bytes (incompressible enough to defeat gzip).
   static func noise(count: Int, seed: UInt64 = 0x9E37_79B9_7F4A_7C15) -> Data {
     var state = seed
-    var data = Data(count: count)
-    data.withUnsafeMutableBytes { buffer in
-      for index in 0..<count {
-        state ^= state << 13
-        state ^= state >> 7
-        state ^= state << 17
-        buffer[index] = UInt8(truncatingIfNeeded: state)
-      }
+    var bytes = [UInt8](repeating: 0, count: count)
+    for index in bytes.indices {
+      state ^= state << 13
+      state ^= state >> 7
+      state ^= state << 17
+      bytes[index] = UInt8(truncatingIfNeeded: state)
     }
-    return data
+    return Data(bytes)
   }
 }

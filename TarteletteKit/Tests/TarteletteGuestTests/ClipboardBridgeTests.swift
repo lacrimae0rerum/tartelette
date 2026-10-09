@@ -67,6 +67,12 @@ struct ClipboardBridgeTests {
 
     let state = try await fixture.bridge.pushToGuest(payload, endpoint: fixture.endpoint)
     #expect(state.fingerprint == payload.fingerprint)
+    // The guest script writes from another process; on a slow machine this process can take a
+    // moment to see the named pasteboard change (the other clipboard tests wait for it too).
+    let deadline = ContinuousClock.now + .seconds(20)
+    while fixture.guestBoard.changeCount != state.changeCount, ContinuousClock.now < deadline {
+      try await Task.sleep(for: .milliseconds(50))
+    }
     #expect(state.changeCount == fixture.guestBoard.changeCount)
     #expect(fixture.guestBoard.string(forType: .string) == payload.plainText)
 

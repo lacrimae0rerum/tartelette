@@ -46,6 +46,8 @@ private struct ConnectionCard: View {
   let state: VMClipboardState
   let engine: ClipboardEngine
   @Environment(AppModel.self) private var model
+  @Environment(\.openURL) private var openURL
+  @State private var pasteboardAccess = PasteboardAccess.current
 
   var body: some View {
     let clipboard = model.clipboard
@@ -132,6 +134,32 @@ private struct ConnectionCard: View {
     .font(.caption)
     .foregroundStyle(.secondary)
     .fixedSize(horizontal: false, vertical: true)
+    .task {
+      // The user can change this in System Settings at any time.
+      while !Task.isCancelled {
+        pasteboardAccess = PasteboardAccess.current
+        try? await Task.sleep(for: .seconds(2))
+      }
+    }
+
+    if state.liveSyncEnabled {
+      switch pasteboardAccess {
+      case .denied:
+        InlineNotice(
+          .warning,
+          "macOS doesn't let Tartelette read what you copy, so nothing goes from this Mac to the VM. Allow Tartelette in System Settings › Privacy & Security › Paste from Other Apps.",
+          actionTitle: "Open Settings…"
+        ) { openURL(PasteboardAccess.settingsURL) }
+      case .ask:
+        InlineNotice(
+          .info,
+          "macOS asks before Tartelette reads what you copy in other apps. To sync without prompts, allow Tartelette in System Settings › Privacy & Security › Paste from Other Apps.",
+          actionTitle: "Open Settings…"
+        ) { openURL(PasteboardAccess.settingsURL) }
+      case .allowed:
+        EmptyView()
+      }
+    }
   }
 
   @ViewBuilder
@@ -148,6 +176,26 @@ private struct ConnectionCard: View {
       )
     }
   }
+}
+
+/// Whether macOS lets Tartelette read the Mac's clipboard. Since macOS 15.4 the system can ask the
+/// user, or refuse, before an app reads what was copied in other apps; live sync reads it on every
+/// copy.
+enum PasteboardAccess {
+  case allowed, ask, denied
+
+  static var current: PasteboardAccess {
+    guard #available(macOS 15.4, *) else { return .allowed }
+    switch NSPasteboard.general.accessBehavior {
+    case .alwaysDeny: return .denied
+    case .ask: return .ask
+    // `.default` means macOS hasn't asked yet; `.alwaysAllow` needs nothing.
+    default: return .allowed
+    }
+  }
+
+  /// System Settings › Privacy & Security › Paste from Other Apps.
+  static let settingsURL = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Pasteboard")!
 }
 
 // MARK: - Manual transfers

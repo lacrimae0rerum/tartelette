@@ -17,7 +17,11 @@ struct TartMissingView: View {
       VStack(spacing: 6) {
         Text("Tart Isn't Installed")
           .font(.largeTitle.weight(.semibold))
-        Text("Tartelette manages virtual machines with Tart, the virtualization tool for Apple silicon. Install it with Homebrew, then check again.")
+        Text(
+          Links.canInstallTartWithHomebrew
+            ? "Tartelette manages virtual machines with Tart, the virtualization tool for Apple silicon. Install it with Homebrew, then check again."
+            : "Tartelette manages virtual machines with Tart, the virtualization tool for Apple silicon. On macOS 14, install it from its release download (Homebrew's Tart needs macOS 15), then check again."
+        )
           .multilineTextAlignment(.center)
           .foregroundStyle(.secondary)
           .frame(maxWidth: 460)
@@ -39,7 +43,7 @@ struct TartMissingView: View {
         .buttonStyle(.borderedProminent)
       }
       if checked, !model.context.isAvailable {
-        Text("Still not found in /opt/homebrew/bin, /usr/local/bin or your PATH.")
+        Text("Still not found in /opt/homebrew/bin, /usr/local/bin, /Applications/tart.app or your PATH.")
           .font(.caption)
           .foregroundStyle(.secondary)
       }

@@ -7,12 +7,14 @@ DERIVED_DATA   := build/DerivedData
 APP            := build/Tartelette.app
 INSTALL_DIR   ?= /Applications
 INSTALLED_APP  := $(INSTALL_DIR)/Tartelette.app
+DIST           := dist
 
 BRAND_ASSETS   := AppIcon.icon Assets.xcassets/Contents.json Assets.xcassets/AccentColor.colorset \
                   Assets.xcassets/MenuBarIcon.imageset Assets.xcassets/MenuBarIconActive.imageset \
                   Assets.xcassets/BrandMark.imageset
 
-.PHONY: all assets check-assets test test-kit test-app build run install uninstall check-install-dir clean open
+.PHONY: all assets check-assets test test-kit test-app build run install uninstall check-install-dir \
+        package release clean open
 
 all: test build
 
@@ -84,9 +86,35 @@ install: build check-install-dir
 uninstall: check-install-dir
 	rm -rf "$(INSTALLED_APP)"
 
+## Package build/Tartelette.app for distribution into dist/: a drag-to-install disk image (with the
+## app icon as its volume icon), a zip, and SHA256SUMS.txt — all named after the app's version.
+package: build
+	@set -e; \
+	codesign --verify --deep --strict "$(APP)"; \
+	version=$$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$(APP)/Contents/Info.plist"); \
+	name="Tartelette-$$version"; \
+	work=$$(mktemp -d); trap 'hdiutil detach -quiet "$$work/mnt" 2>/dev/null || true; rm -rf "$$work"' EXIT; \
+	mkdir "$$work/root" "$$work/mnt"; \
+	ditto "$(APP)" "$$work/root/Tartelette.app"; \
+	ln -s /Applications "$$work/root/Applications"; \
+	hdiutil create -quiet -volname Tartelette -srcfolder "$$work/root" -fs HFS+ -format UDRW "$$work/rw.dmg"; \
+	hdiutil attach -quiet -nobrowse -noautoopen -readwrite -mountpoint "$$work/mnt" "$$work/rw.dmg"; \
+	cp "$(APP)/Contents/Resources/AppIcon.icns" "$$work/mnt/.VolumeIcon.icns"; \
+	SetFile -a C "$$work/mnt"; \
+	hdiutil detach -quiet "$$work/mnt" || hdiutil detach -quiet -force "$$work/mnt"; \
+	rm -rf "$(DIST)"; mkdir -p "$(DIST)"; \
+	hdiutil convert -quiet "$$work/rw.dmg" -format UDZO -imagekey zlib-level=9 -o "$(DIST)/$$name.dmg"; \
+	hdiutil verify -quiet "$(DIST)/$$name.dmg"; \
+	ditto -c -k --sequesterRsrc --keepParent "$(APP)" "$(DIST)/$$name.zip"; \
+	(cd "$(DIST)" && shasum -a 256 "$$name.dmg" "$$name.zip" > SHA256SUMS.txt); \
+	echo "Packaged $(DIST)/$$name.dmg, $(DIST)/$$name.zip and $(DIST)/SHA256SUMS.txt"
+
+## Everything a release needs, in order: brand assets check, all tests, then the packages.
+release: check-assets test package
+
 ## Open the project in Xcode.
 open:
 	open $(PROJECT)
 
 clean:
-	rm -rf build TarteletteKit/.build
+	rm -rf build $(DIST) TarteletteKit/.build

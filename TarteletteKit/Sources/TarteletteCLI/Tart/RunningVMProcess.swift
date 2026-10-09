@@ -13,6 +13,9 @@ public final class RunningVMProcess: Sendable {
     /// One thread at a time calls `waitpid`; others only ask it to look again.
     var reaping = false
     var reapRequested = false
+    /// Set once the exit source fired. The kernel can post NOTE_EXIT a moment before the child is
+    /// reapable, and the source fires only once, so from then on `waitpid` must wait, not poll.
+    var exitObserved = false
   }
 
   /// Keeps launched processes (and their exit sources) alive until they have been reaped.
@@ -116,7 +119,7 @@ public final class RunningVMProcess: Sendable {
   private func monitorExit() {
     Self.live.withLock { $0[pid] = self }
     let source = DispatchSource.makeProcessSource(identifier: pid, eventMask: .exit, queue: .global())
-    source.setEventHandler { [self] in reap() }
+    source.setEventHandler { [self] in reap(exitObserved: true) }
     state.withLock { $0.source = source }
     source.activate()
     // The child may have exited before the source was registered.
@@ -129,8 +132,14 @@ public final class RunningVMProcess: Sendable {
   /// Reaping is single-flight: only the thread holding the claim calls `waitpid`, so a second
   /// caller can't get ECHILD and record -1 over the real exit code. A caller that finds the claim
   /// taken asks the holder to check again, so an exit is never missed.
-  func reap() {
+  ///
+  /// `exitObserved` is true when called from the exit source: the child is gone, so `waitpid`
+  /// blocks until the kernel finishes the exit instead of polling. Under load NOTE_EXIT can win
+  /// that race (about 1 in 6,000 exits in a stress run); a poll would then find the child "still
+  /// running" and, with no further event coming, the exit would never be recorded.
+  func reap(exitObserved: Bool = false) {
     let claimed = state.withLock { state -> Bool in
+      if exitObserved { state.exitObserved = true }
       guard state.exitCode == nil else { return false }
       if state.reaping {
         state.reapRequested = true
@@ -142,10 +151,11 @@ public final class RunningVMProcess: Sendable {
     guard claimed else { return }
 
     while true {
+      let options = state.withLock { $0.exitObserved } ? 0 : WNOHANG
       var status: Int32 = 0
       var result: pid_t
       repeat {
-        result = waitpid(pid, &status, WNOHANG)
+        result = waitpid(pid, &status, options)
       } while result == -1 && errno == EINTR
 
       if result == pid {

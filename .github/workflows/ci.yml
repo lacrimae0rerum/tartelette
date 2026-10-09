@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: Xcode ${{ matrix.xcode }}
+    runs-on: macos-26
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The oldest Xcode the project supports (Swift 6.2 settings, Icon Composer icon).
+          - xcode: "26.0.1"
+          # The runner's default Xcode; this leg also checks the brand assets and packages the app.
+          - xcode: "26.6"
+            package: true
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_${{ matrix.xcode }}.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Show toolchain
+        run: |
+          sw_vers
+          xcodebuild -version
+          swift --version
+
+      - name: Test
+        run: make test
+
+      - name: Check brand assets
+        if: matrix.package
+        run: make check-assets
+
+      - name: Package
+        if: matrix.package
+        run: make package
+
+      - name: Upload packages
+        if: matrix.package
+        uses: actions/upload-artifact@v4
+        with:
+          name: Tartelette-${{ github.sha }}
+          path: dist/
+          if-no-files-found: error

@@ -37,6 +37,10 @@ struct AppCommands: Commands {
       Link("Tart Documentation", destination: Links.tartDocumentation)
       Link("Tart Guest Agent", destination: Links.guestAgent)
       Link("Cirrus Labs Images", destination: Links.images)
+      Divider()
+      Link("Tartelette on GitHub", destination: Links.repository)
+      Link("Release Notes", destination: Links.releases)
+      Link("Report an Issue…", destination: Links.issues)
     }
   }
 }
