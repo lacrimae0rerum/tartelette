@@ -226,6 +226,13 @@ final class VMLibrary {
 
     var options = requested
     options.name = name
+    // Values tart's argument syntax can't carry are left out of argv; never launch without them.
+    guard options.isLaunchable else {
+      navigation.show(
+        title: "Can't start “\(name)”",
+        message: options.validationProblems.joined(separator: "\n") + "\n\nFix them in Run Options.")
+      return
+    }
     let engine = (clipboardEngine ?? profiles.profile(for: name).clipboardEngine).resolved(for: os)
     if engine == .bridge || engine == .off { options.noClipboard = true }
 
