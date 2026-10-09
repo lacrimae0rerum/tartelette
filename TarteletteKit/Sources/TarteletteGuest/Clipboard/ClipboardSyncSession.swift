@@ -136,6 +136,10 @@ public final class ClipboardSyncSession {
   /// The host change count whose contents couldn't be read completely, since when, and whether
   /// that was reported.
   private var incompleteHost: (changeCount: Int, since: ContinuousClock.Instant, reported: Bool)?
+  /// A guest change whose read keeps coming back incomplete, and since when.
+  private var incompleteGuest: (changeCount: Int, since: ContinuousClock.Instant)?
+  /// The last payload reported as a suppressed echo, so it is reported once.
+  private var lastReportedEchoFingerprint: String?
   /// Name and size of the files moved by the last sync (either direction), and when.
   private var lastSyncedFiles: Set<FileIdentity> = []
   private var lastSyncedFilesAt: ContinuousClock.Instant?
@@ -297,7 +301,10 @@ public final class ClipboardSyncSession {
     hostLateWriteDeadline = ContinuousClock.now + configuration.hostLateWriteWindow
 
     guard let payload = hostPayload(captured), payload.fingerprint != lastSyncedFingerprint else { return }
-    guard !isDegradedEcho(payload) else { return }
+    guard !isDegradedEcho(payload) else {
+      reportSuppressedEcho(payload)
+      return
+    }
     if payload.totalByteCount > configuration.maxAutomaticTransferBytes {
       if lastSkippedFingerprint != payload.fingerprint {
         lastSkippedFingerprint = payload.fingerprint
@@ -433,11 +440,32 @@ public final class ClipboardSyncSession {
     guard activeTransfers == 0, changeCount != knownGuestChangeCount else { return }
     let maxBytes = configuration.maxAutomaticTransferBytes
     let outcome = await serialized { await self.receive(maxBytes: maxBytes, force: false) }
-    if outcome == .transientFailure || outcome == .pending {
+    if outcome == .pending {
+      // Read it again next poll, but not forever: a copy that never resolves is reported once and
+      // then left alone until the guest clipboard changes again.
+      if giveUpOnIncompleteGuest(changeCount), knownGuestChangeCount == known { knownGuestChangeCount = changeCount }
+      return
+    }
+    incompleteGuest = nil
+    if outcome == .transientFailure {
       // Keep the change pending: the next poll pulls it again.
       return
     }
     if knownGuestChangeCount == known { knownGuestChangeCount = changeCount }
+  }
+
+  /// Tracks a guest change whose reads stay incomplete; after `incompleteReportDelay` reports it
+  /// once and returns true, meaning the change should be treated as handled.
+  private func giveUpOnIncompleteGuest(_ changeCount: Int) -> Bool {
+    let now = ContinuousClock.now
+    guard let incomplete = incompleteGuest, incomplete.changeCount == changeCount else {
+      incompleteGuest = (changeCount, now)
+      return false
+    }
+    guard now - incomplete.since >= configuration.incompleteReportDelay else { return false }
+    incompleteGuest = nil
+    emit(.skipped(reason: "Some items copied in \(endpoint.vmName) couldn't be read from its clipboard. Copy them again in the VM to send them."))
+    return true
   }
 
   /// Re-reads the guest change count after `guestSettleDelay` until it stops moving.
@@ -488,6 +516,13 @@ public final class ClipboardSyncSession {
     return identities.isSubset(of: lastSyncedFiles)
   }
 
+  /// Makes a suppressed degraded echo visible (once per payload): it may be a deliberate copy.
+  private func reportSuppressedEcho(_ payload: ClipboardPayload) {
+    guard lastReportedEchoFingerprint != payload.fingerprint else { return }
+    lastReportedEchoFingerprint = payload.fingerprint
+    emit(.skipped(reason: "\(payload.summary) looks like an echo of the files just synced; copy again in a few seconds to send it."))
+  }
+
   func isEcho(_ payload: ClipboardPayload) -> Bool {
     payload.fingerprint == lastSyncedFingerprint || payload.fingerprint == lastPushedGuestFingerprint
   }
@@ -515,7 +550,13 @@ public final class ClipboardSyncSession {
       }
       // A Linux guest holding the plain-text projection of a richer host clipboard must not
       // downgrade the host.
-      guard force || !(isEcho(payload) || isDegradedEcho(payload)) else { return .skipped }
+      if !force {
+        if isEcho(payload) { return .skipped }
+        if isDegradedEcho(payload) {
+          reportSuppressedEcho(payload)
+          return .skipped
+        }
+      }
       let changeCount = PasteboardCodec.write(payload, to: hostPasteboard)
       handledHost = HostObservation(changeCount: changeCount, shape: PasteboardCodec.shape(hostPasteboard))
       pendingHost = nil
@@ -535,11 +576,16 @@ public final class ClipboardSyncSession {
       emit(.skipped(reason: "The clipboard in \(endpoint.vmName) holds \(size), above the \(maximum) automatic limit. Use Paste from VM to copy it anyway."))
       return .skipped
     } catch {
-      emit(.failed(message: "Couldn't read the clipboard of \(endpoint.vmName): \(error.localizedDescription)"))
+      let message = "Couldn't read the clipboard of \(endpoint.vmName): \(error.localizedDescription)"
       if Self.failureKind(of: error) == .transient {
+        // Quiet for automatic sync: the change stays pending and is pulled again, and a lasting
+        // outage shows up as the guest becoming unavailable.
         recordClipboardFailure(error)
+        if force { emit(.failed(message: message)) }
         return .transientFailure
       }
+      // Deterministic failures drop the change, so this is reported once per change.
+      emit(.failed(message: message))
       return .permanentFailure
     }
   }

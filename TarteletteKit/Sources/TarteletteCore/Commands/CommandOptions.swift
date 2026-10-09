@@ -394,6 +394,18 @@ public struct RunOptions: Sendable, Hashable, Codable {
     return args
   }
 
+  /// Problems that `arguments` can't express faithfully, as user-facing messages.
+  ///
+  /// `arguments` never emits a corrupted option list: values Tart couldn't parse (for example a
+  /// provisioning password containing a comma) are left out. Callers must therefore check this
+  /// list and refuse to launch while it isn't empty, rather than starting the VM without them.
+  public var validationProblems: [String] {
+    [provisioning?.problem].compactMap { $0 }
+  }
+
+  /// Whether `arguments` carries every option faithfully (`validationProblems` is empty).
+  public var isLaunchable: Bool { validationProblems.isEmpty }
+
   /// A copy with the provisioning password masked, for display and logs.
   public var redacted: RunOptions {
     var copy = self

@@ -32,7 +32,8 @@ final class ChildProcess: @unchecked Sendable {
   }
 
   /// How long to wait for EOF after the process exits before giving up on the streams.
-  private static let streamGracePeriod: TimeInterval = 2
+  static let defaultStreamGracePeriod: TimeInterval = 2
+  private let streamGracePeriod: TimeInterval
 
   private let process = Process()
   private let stdoutPipe = Pipe()
@@ -49,8 +50,10 @@ final class ChildProcess: @unchecked Sendable {
     arguments: [String],
     environment: [String: String],
     standardInput: Data?,
-    handlers: Handlers
+    handlers: Handlers,
+    streamGracePeriod: TimeInterval = ChildProcess.defaultStreamGracePeriod
   ) {
+    self.streamGracePeriod = streamGracePeriod
     self.standardInput = standardInput
     self.handlers = handlers
     process.executableURL = executable
@@ -191,7 +194,7 @@ final class ChildProcess: @unchecked Sendable {
   private func markExited(_ status: Int32) {
     state.withLock { $0.exitStatus = status }
     finishIfComplete()
-    DispatchQueue.global().asyncAfter(deadline: .now() + Self.streamGracePeriod) { [self] in
+    DispatchQueue.global().asyncAfter(deadline: .now() + streamGracePeriod) { [self] in
       // A grandchild may hold the pipes open; stop waiting for EOF.
       if state.withLock({ !$0.stdoutClosing }) {
         stdoutPipe.fileHandleForReading.readabilityHandler = nil

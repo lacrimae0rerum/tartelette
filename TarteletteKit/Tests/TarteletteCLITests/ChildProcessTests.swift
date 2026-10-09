@@ -65,24 +65,35 @@ struct ChildProcessTests {
   /// delivery is still in flight. That delivery must land before the close handler, and nothing may
   /// be delivered after it (the grandchild's later output is dropped deterministically).
   @Test func graceCloseWaitsForInFlightDeliveryAndDropsLaterOutput() async throws {
+    let pidFile = FileManager.default.temporaryDirectory.appendingPathComponent("grandchild-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: pidFile) }
     let recorder = Recorder()
     let child = ChildProcess(
       executable: URL(fileURLWithPath: "/bin/sh"),
-      arguments: ["-c", "(sleep 4; echo late) & echo early"],
+      arguments: ["-c", "(sleep 1; echo late) & echo $! > \"$1\"; echo early", "sh", pidFile.path],
       environment: ProcessInfo.processInfo.environment,
       standardInput: nil,
       handlers: .init(
         standardOutput: { data in
           let text = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-          // Still being delivered when the 2 s grace period closes the stream.
-          if text.contains("early") { Thread.sleep(forTimeInterval: 2.6) }
+          // Still being delivered when the 0.3 s grace period closes the stream.
+          if text.contains("early") { Thread.sleep(forTimeInterval: 0.6) }
           recorder.record("data:\(text)")
         },
         standardError: { _ in },
         standardOutputClosed: { recorder.record("stdout-closed") },
         standardErrorClosed: { recorder.record("stderr-closed") }
-      )
+      ),
+      streamGracePeriod: 0.3
     )
+    defer {
+      // Never leave the grandchild behind.
+      if let text = try? String(contentsOf: pidFile, encoding: .utf8),
+        let pid = Int32(text.trimmingCharacters(in: .whitespacesAndNewlines))
+      {
+        kill(pid, SIGKILL)
+      }
+    }
     let status: Int32 = await withCheckedContinuation { continuation in
       do {
         try child.start { status in
@@ -93,8 +104,8 @@ struct ChildProcessTests {
         continuation.resume(returning: -1)
       }
     }
-    // Give the grandchild time to write its late line (at about 4 s).
-    try await Task.sleep(for: .seconds(3))
+    // The grandchild writes its late line about 1 s after starting.
+    try await Task.sleep(for: .milliseconds(900))
 
     let events = recorder.snapshot
     #expect(status == 0)
