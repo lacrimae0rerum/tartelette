@@ -219,7 +219,7 @@ private struct NetworkCard: View {
           .foregroundStyle(.secondary)
       }
     }
-    .task(id: vm.state) {
+    .task(id: VMTaskKey(name: vm.name, state: vm.state)) {
       if vm.state.isRunning, model.library.ipAddresses[vm.name] == nil {
         try? await Task.sleep(for: .seconds(1))
         resolve(quietly: true)
@@ -330,7 +330,7 @@ private struct HostProcessesCard: View {
           .foregroundStyle(.secondary)
       }
     }
-    .task(id: vm.state) {
+    .task(id: VMTaskKey(name: vm.name, state: vm.state)) {
       guard vm.state.isRunning else {
         processes = nil
         return
@@ -392,4 +392,10 @@ struct CopyButton: View {
     .help("Copy")
     .accessibilityLabel("Copy \(value)")
   }
+}
+
+/// Restarts a view's task when either the VM or its state changes.
+nonisolated struct VMTaskKey: Hashable, Sendable {
+  let name: String
+  let state: VMState
 }

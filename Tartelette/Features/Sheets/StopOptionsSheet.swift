@@ -26,7 +26,8 @@ struct StopOptionsSheet: View {
       commandLine: commandLine(state),
       primaryTitle: primaryTitle(state),
       primaryRole: state == .suspended ? .destructive : nil,
-      isPrimaryDisabled: state == .stopped,
+      // Only running and suspended VMs can be stopped; anything else would be a silent no-op.
+      isPrimaryDisabled: !(state == .running || state == .suspended),
       onPrimary: { perform(state) }
     ) {
       switch state {
@@ -36,8 +37,12 @@ struct StopOptionsSheet: View {
         InlineNotice(
           .warning,
           "“\(vmName)” is suspended. Stopping it deletes the saved memory snapshot; the next start boots from scratch and unsaved work in the VM is lost.")
-      case .stopped, .unknown:
+      case .stopped:
         InlineNotice(.info, "“\(vmName)” isn't running.")
+      case .unknown(let reported):
+        InlineNotice(
+          .warning,
+          "Tartelette can't tell whether “\(vmName)” is running (Tart reported “\(reported)”). Refresh the list and try again.")
       }
     }
     .onAppear {
@@ -89,7 +94,8 @@ struct StopOptionsSheet: View {
     switch state {
     case .running: "Choose how to stop the VM."
     case .suspended: "The VM's saved state will be removed."
-    default: "Nothing to stop."
+    case .stopped: "Nothing to stop."
+    case .unknown: "The VM's state is unknown."
     }
   }
 
@@ -126,7 +132,8 @@ struct StopOptionsSheet: View {
     case (.running, .suspend):
       library.suspend(vmName)
     default:
-      break
+      // The button is disabled in every other state; never dismiss as if something happened.
+      return
     }
     dismiss()
   }

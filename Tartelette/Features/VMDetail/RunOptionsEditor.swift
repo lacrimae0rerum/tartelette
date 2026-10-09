@@ -12,12 +12,14 @@ struct RunOptionsEditor: View {
   @Binding var profile: RunProfile
   let vmName: String
   let os: VMOperatingSystem
+  /// Shared with the container's footer so validation and the network section always agree.
+  let softnet: SoftnetStatus
 
   var body: some View {
     Form {
       DisplayOptionsSection(profile: $profile, os: os)
       ClipboardOptionsSection(profile: $profile, os: os)
-      NetworkOptionsSection(options: $profile.options)
+      NetworkOptionsSection(options: $profile.options, softnet: softnet)
       SharingOptionsSection(options: $profile.options, os: os)
       DiskOptionsSection(options: $profile.options)
       DeviceOptionsSection(profile: $profile, os: os)
@@ -151,6 +153,53 @@ enum SoftnetState: Equatable {
     guard let environment = context.environment else { return .unknown }
     guard let url = SoftnetSupport.locate(environment: environment) else { return .missing }
     return SoftnetSupport.isPrivileged(url) ? .ready : .unprivileged
+  }
+}
+
+/// The Softnet state shown by a run-options screen, refreshed whenever it may have changed:
+/// when the screen appears, when the app becomes active (e.g. after installing it in Terminal)
+/// and after Tartelette's own setup.
+@Observable
+final class SoftnetStatus {
+  private(set) var state: SoftnetState = .unknown
+  private(set) var isEnabling = false
+
+  func refresh(_ context: TartContext) {
+    state = SoftnetState.inspect(context)
+  }
+
+  /// Runs the one-time privileged setup. Ignores repeated requests while one is in progress.
+  func enable(context: TartContext, navigation: NavigationModel) {
+    guard !isEnabling else { return }
+    guard let environment = context.environment, let url = SoftnetSupport.locate(environment: environment) else {
+      navigation.show(
+        title: "Softnet Isn't Installed",
+        message: "Tartelette couldn't find the softnet executable. Install it with “brew install cirruslabs/cli/softnet”, then try again.")
+      refresh(context)
+      return
+    }
+    isEnabling = true
+    Task {
+      do {
+        try await SoftnetSupport.enablePrivileges(for: url, runner: context.runner)
+      } catch is CancellationError {
+      } catch ProcessRunError.cancelled {
+      } catch {
+        navigation.show(error: error, title: "Couldn't set up Softnet")
+      }
+      isEnabling = false
+      refresh(context)
+    }
+  }
+}
+
+extension View {
+  /// Keeps `status` current: on appear and whenever the app becomes active.
+  func refreshesSoftnet(_ status: SoftnetStatus, context: TartContext) -> some View {
+    onAppear { status.refresh(context) }
+      .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+        status.refresh(context)
+      }
   }
 }
 
@@ -320,10 +369,9 @@ private enum NetworkMode: String, CaseIterable, Identifiable {
 
 private struct NetworkOptionsSection: View {
   @Binding var options: RunOptions
+  let softnet: SoftnetStatus
   @Environment(AppModel.self) private var model
   @State private var interfaces: [BridgedInterface] = []
-  @State private var softnet: SoftnetState = .unknown
-  @State private var isEnablingSoftnet = false
 
   var body: some View {
     let mode = NetworkMode(options.network)
@@ -357,7 +405,6 @@ private struct NetworkOptionsSection: View {
     }
     .task {
       interfaces = NetworkInterfaces.bridgeable()
-      softnet = SoftnetState.inspect(model.context)
     }
   }
 
@@ -418,14 +465,15 @@ private struct NetworkOptionsSection: View {
       get: { softnetOptions },
       set: { options.network = .softnet($0) })
 
-    switch softnet {
+    switch softnet.state {
     case .missing:
       InlineNotice(.error, "Softnet isn't installed. Install it with “brew install cirruslabs/cli/softnet”.")
     case .unprivileged:
       InlineNotice(
         .warning, "Softnet must run as root. Tart only sets this up in a terminal, so Tartelette can do it for you.",
-        actionTitle: isEnablingSoftnet ? "Setting Up…" : "Set Up…"
-      ) { enableSoftnet() }
+        actionTitle: softnet.isEnabling ? "Setting Up…" : "Set Up…"
+      ) { softnet.enable(context: model.context, navigation: model.navigation) }
+      .disabled(softnet.isEnabling)
     case .ready, .unknown:
       EmptyView()
     }
@@ -443,45 +491,39 @@ private struct NetworkOptionsSection: View {
       .foregroundStyle(.secondary)
   }
 
-  private func enableSoftnet() {
-    guard let environment = model.context.environment, let url = SoftnetSupport.locate(environment: environment) else {
-      return
-    }
-    isEnablingSoftnet = true
-    Task {
-      defer { isEnablingSoftnet = false }
-      do {
-        try await SoftnetSupport.enablePrivileges(for: url, runner: model.context.runner)
-      } catch is CancellationError {
-      } catch ProcessRunError.cancelled {
-      } catch {
-        model.navigation.show(error: error, title: "Couldn't set up Softnet")
-      }
-      softnet = SoftnetState.inspect(model.context)
-    }
-  }
 }
 
-/// Input checks for network token lists.
+/// Input checks for network token lists. Strict on purpose: anything Softnet would reject at
+/// launch is caught here (no empty parts, signs, spaces or out-of-range numbers).
 enum NetworkValidators {
   static func cidr(_ value: String) -> String? {
-    let parts = value.split(separator: "/")
-    guard parts.count == 2, let prefix = Int(parts[1]), (0...32).contains(prefix) else {
+    let parts = value.split(separator: "/", omittingEmptySubsequences: false)
+    guard parts.count == 2, number(parts[1], maximum: 32) != nil else {
       return "Use CIDR notation, e.g. 10.0.0.0/8."
     }
-    let octets = parts[0].split(separator: ".")
-    guard octets.count == 4, octets.allSatisfy({ UInt8($0) != nil }) else {
+    let octets = parts[0].split(separator: ".", omittingEmptySubsequences: false)
+    guard octets.count == 4, octets.allSatisfy({ number($0, maximum: 255) != nil }) else {
       return "“\(parts[0])” isn't an IPv4 address."
     }
     return nil
   }
 
   static func portMapping(_ value: String) -> String? {
-    let parts = value.split(separator: ":")
-    guard parts.count == 2, let outside = UInt16(parts[0]), let inside = UInt16(parts[1]), outside > 0, inside > 0 else {
+    let parts = value.split(separator: ":", omittingEmptySubsequences: false)
+    guard parts.count == 2, let outside = number(parts[0], maximum: 65_535), let inside = number(parts[1], maximum: 65_535),
+      outside > 0, inside > 0
+    else {
       return "Use OUTSIDE:INSIDE port numbers, e.g. 8080:80."
     }
     return nil
+  }
+
+  /// A plain decimal number (ASCII digits only, no sign, no leading zeros) up to `maximum`.
+  static func number(_ text: Substring, maximum: Int) -> Int? {
+    guard !text.isEmpty, text.count <= 5, text.allSatisfy({ $0.isASCII && $0.isWholeNumber }) else { return nil }
+    guard text == "0" || text.first != "0" else { return nil }
+    guard let value = Int(text), value <= maximum else { return nil }
+    return value
   }
 }
 

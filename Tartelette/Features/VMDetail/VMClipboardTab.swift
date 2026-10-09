@@ -228,9 +228,13 @@ private struct TransferButtonStyle: ButtonStyle {
 }
 
 /// The Mac clipboard right now, refreshed while visible.
+///
+/// Writers clear the pasteboard (which bumps its change count) and then add items, which doesn't;
+/// so after a change it is read again for a few seconds to catch items that arrived late.
 private struct HostClipboardPreview: View {
   @State private var payload: ClipboardPayload?
   @State private var changeCount = -1
+  @State private var rereads = 0
 
   var body: some View {
     ClipboardPreview(payload: payload, emptyTitle: "The Mac clipboard is empty")
@@ -239,7 +243,12 @@ private struct HostClipboardPreview: View {
           let current = NSPasteboard.general.changeCount
           if current != changeCount {
             changeCount = current
-            payload = PasteboardCodec.snapshot()
+            rereads = 3
+          }
+          if rereads > 0 {
+            rereads -= 1
+            let snapshot = PasteboardCodec.snapshot()
+            if snapshot != payload { payload = snapshot }
           }
           try? await Task.sleep(for: .seconds(1))
         }

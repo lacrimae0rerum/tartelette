@@ -116,19 +116,31 @@ struct VMConfigurationTab: View {
   private func apply(_ options: SetOptions) {
     isApplying = true
     errorMessage = nil
+    let name = vm.name
     Task {
-      defer { isApplying = false }
       do {
         try await model.library.applySettings(options)
-        // The next refresh brings the new baseline; take it as the draft.
-        draft = nil
-        adopt(ConfigurationDraft(config: model.library.config(of: vm.name), listing: vm), force: true)
-        withAnimation { confirmation = "Saved. Changes take effect the next time the VM starts." }
-        try? await Task.sleep(for: .seconds(4))
-        withAnimation { confirmation = nil }
       } catch {
+        isApplying = false
         errorMessage = error.localizedDescription
+        return
       }
+      // Take the new baseline only after the library has re-read both config.json and the listing
+      // (disk capacity), so the draft never starts from stale values.
+      await model.library.refresh()
+      isApplying = false
+      if let listing = model.library.vm(named: name) {
+        adopt(ConfigurationDraft(config: model.library.config(of: name), listing: listing), force: true)
+      }
+      showConfirmation("Saved. Changes take effect the next time the VM starts.")
+    }
+  }
+
+  private func showConfirmation(_ message: String) {
+    withAnimation { confirmation = message }
+    Task {
+      try? await Task.sleep(for: .seconds(4))
+      if confirmation == message { withAnimation { confirmation = nil } }
     }
   }
 }
@@ -179,6 +191,9 @@ struct ConfigurationDraft: Equatable {
   var unit: DisplayUnit
   var refit: Refit
   var diskSizeGB: Int
+  /// False when Tart couldn't report the disk's capacity (e.g. an ASIF disk held by a running VM);
+  /// the size can't be changed then, because growing needs a known starting point.
+  var isDiskCapacityKnown: Bool
   var replacementDiskPath: String?
   var randomMAC = false
   var randomSerial = false
@@ -191,7 +206,13 @@ struct ConfigurationDraft: Equatable {
     height = config.display?.height ?? 768
     unit = DisplayUnit(rawValue: config.display?.unit ?? "") ?? .automatic
     refit = Refit(config.displayRefit)
-    diskSizeGB = Int(listing.diskGB ?? 0)
+    if let capacity = listing.diskGB, capacity.isFinite, capacity >= 0, capacity < 1_000_000 {
+      diskSizeGB = Int(capacity)
+      isDiskCapacityKnown = true
+    } else {
+      diskSizeGB = 0
+      isDiskCapacityKnown = false
+    }
   }
 
   var displayArgument: String { "\(width)x\(height)\(unit.rawValue)" }
@@ -208,7 +229,7 @@ struct ConfigurationDraft: Equatable {
       randomMAC: randomMAC,
       randomSerial: randomSerial,
       diskPath: replacementDiskPath,
-      diskSizeGB: diskSizeGB > baseline.diskSizeGB ? diskSizeGB : nil
+      diskSizeGB: baseline.isDiskCapacityKnown && diskSizeGB > baseline.diskSizeGB ? diskSizeGB : nil
     )
   }
 
@@ -365,20 +386,29 @@ private struct DiskSection: View {
 
   var body: some View {
     Section {
-      LabeledContent {
-        HStack(spacing: 8) {
-          Text("\(draft.diskSizeGB) GB").monospacedDigit()
-          Stepper(
-            "Disk size", value: $draft.diskSizeGB, in: baseline.diskSizeGB...max(baseline.diskSizeGB, 4_000), step: 10
-          )
-          .labelsHidden()
+      if baseline.isDiskCapacityKnown {
+        LabeledContent {
+          HStack(spacing: 8) {
+            Text("\(draft.diskSizeGB) GB").monospacedDigit()
+            Stepper(
+              "Disk size", value: $draft.diskSizeGB, in: baseline.diskSizeGB...max(baseline.diskSizeGB, 4_000), step: 10
+            )
+            .labelsHidden()
+          }
+        } label: {
+          Text("Disk size")
+          Text(
+            draft.diskSizeGB > baseline.diskSizeGB
+              ? "The guest must grow its partition afterwards (the guest agent does this on Cirrus Labs images)."
+              : "Disks can only grow. They take space on this Mac only as the guest writes.")
         }
-      } label: {
-        Text("Disk size")
-        Text(
-          draft.diskSizeGB > baseline.diskSizeGB
-            ? "The guest must grow its partition afterwards (the guest agent does this on Cirrus Labs images)."
-            : "Disks can only grow. They take space on this Mac only as the guest writes.")
+      } else {
+        LabeledContent {
+          Text("Unknown").foregroundStyle(.secondary)
+        } label: {
+          Text("Disk size")
+          Text("Tart couldn't report this disk's capacity right now, so it can't be resized. Stop the VM and try again.")
+        }
       }
 
       LabeledContent {

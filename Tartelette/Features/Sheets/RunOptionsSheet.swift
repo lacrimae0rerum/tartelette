@@ -8,7 +8,7 @@ struct RunOptionsSheet: View {
   @Environment(\.dismiss) private var dismiss
   @State private var draft: RunProfile?
   @State private var remember = false
-  @State private var softnet: SoftnetState = .unknown
+  @State private var softnet = SoftnetStatus()
 
   var body: some View {
     let os = model.library.os(of: vmName)
@@ -28,24 +28,24 @@ struct RunOptionsSheet: View {
       .padding(.bottom, 8)
 
       if let draft = Binding($draft) {
-        RunOptionsEditor(profile: draft, vmName: vmName, os: os)
+        RunOptionsEditor(profile: draft, vmName: vmName, os: os, softnet: softnet)
         footer(draft.wrappedValue, os: os)
       } else {
         ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
       }
     }
     .frame(minWidth: 620, idealWidth: 680, minHeight: 560, idealHeight: 720)
-    .onAppear {
-      draft = model.profiles.profile(for: vmName)
-      softnet = SoftnetState.inspect(model.context)
-    }
+    .onAppear { draft = model.profiles.profile(for: vmName) }
+    .refreshesSoftnet(softnet, context: model.context)
   }
 
   private func footer(_ draft: RunProfile, os: VMOperatingSystem) -> some View {
-    let issues = RunOptionsValidation.issues(for: draft, os: os, softnet: softnet)
+    // Preview, validation and launch all use the same effective options.
+    let effective = draft.effectiveOptions(for: os)
+    let issues = RunOptionsValidation.issues(for: draft, os: os, softnet: softnet.state)
     let hasErrors = issues.contains { $0.severity == .error }
     let running = model.library.isRunning(vmName)
-    let command = TartCommand.run(draft.effectiveOptions(for: os))
+    let command = TartCommand.run(effective)
 
     return VStack(spacing: 10) {
       if !issues.isEmpty {
@@ -61,12 +61,13 @@ struct RunOptionsSheet: View {
         Button(running ? "Save" : "Start") {
           if remember || running { model.profiles.save(draft, for: vmName) }
           if !running {
-            model.library.start(vmName, options: draft.options, clipboardEngine: draft.clipboardEngine)
+            model.library.start(vmName, options: effective, clipboardEngine: draft.clipboardEngine)
           }
           dismiss()
         }
         .keyboardShortcut(.defaultAction)
-        .disabled(hasErrors && !running)
+        .disabled(hasErrors)
+        .help(hasErrors ? "Fix the errors above first." : "")
       }
       if running {
         Text("“\(vmName)” is already running. Saved options apply the next time it starts.")

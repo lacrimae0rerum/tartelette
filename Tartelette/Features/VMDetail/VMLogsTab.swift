@@ -20,11 +20,19 @@ final class LogTail {
     self.url = url
   }
 
+  isolated deinit {
+    task?.cancel()
+  }
+
   func start() {
     task?.cancel()
     task = Task { [weak self] in
       while !Task.isCancelled {
-        self?.poll()
+        do {
+          // Hold the tail only while polling, so it can be released between polls.
+          guard let self else { return }
+          self.poll()
+        }
         try? await Task.sleep(for: .seconds(1))
       }
     }
@@ -35,7 +43,8 @@ final class LogTail {
     task = nil
   }
 
-  private func poll() {
+  /// Reads whatever was appended since the last poll (internal for tests).
+  func poll() {
     guard let handle = try? FileHandle(forReadingFrom: url) else {
       exists = false
       return
@@ -50,11 +59,20 @@ final class LogTail {
       text = ""
     }
     guard end > offset else { return }
-    let start = max(offset, end > UInt64(Self.window) ? end - UInt64(Self.window) : 0)
-    try? handle.seek(toOffset: start)
+    let windowStart = end > UInt64(Self.window) ? end - UInt64(Self.window) : 0
+    // More than a window arrived since the last read (or this is the first read of a long log):
+    // the bytes in between are skipped, so the old text no longer connects to the new chunk.
+    let skipped = windowStart > offset
+    try? handle.seek(toOffset: max(offset, windowStart))
     let data = (try? handle.readToEnd()) ?? Data()
     offset = end
-    text += String(decoding: data, as: UTF8.self)
+    var chunk = String(decoding: data, as: UTF8.self)
+    if skipped {
+      // Start at the next full line rather than mid-line.
+      if let newline = chunk.firstIndex(of: "\n") { chunk = String(chunk[chunk.index(after: newline)...]) }
+      text = ""
+    }
+    text += chunk
     if text.utf8.count > Self.window {
       let excess = text.utf8.count - Self.window
       let cut = text.utf8.index(text.utf8.startIndex, offsetBy: excess)

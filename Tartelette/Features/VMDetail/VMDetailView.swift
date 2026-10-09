@@ -21,6 +21,9 @@ struct VMDetailView: View {
         tabContent(vm)
           .frame(maxWidth: .infinity, maxHeight: .infinity)
       }
+      // A new identity per VM resets every tab's drafts, log tails and tasks when the selection
+      // changes, so unsaved edits can never be applied to a different VM.
+      .id(vmName)
       .navigationTitle(vmName)
       .navigationSubtitle(subtitle(vm))
     } else if let image = model.library.images.first(where: { $0.name == vmName }) {

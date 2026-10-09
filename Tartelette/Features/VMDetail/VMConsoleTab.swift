@@ -4,37 +4,63 @@ import SwiftUI
 import TarteletteKit
 
 /// One command run in the guest and its output.
+///
+/// Output is kept in fixed-size blocks: appending only touches the last block (so the view
+/// re-renders one small block instead of the whole output) and trimming drops whole blocks.
 @Observable
 final class ConsoleRun: Identifiable {
-  struct Line: Identifiable {
+  struct Line: Identifiable, Equatable {
     let id: Int
     let text: String
     let isError: Bool
   }
 
+  struct Block: Identifiable, Equatable {
+    let id: Int
+    var lines: [Line]
+  }
+
   let id = UUID()
   let command: String
   let startedAt = Date()
-  private(set) var lines: [Line] = []
+  private(set) var blocks: [Block] = []
   private(set) var exitCode: Int32?
   private(set) var finishedAt: Date?
+  /// Lines dropped from the start once the output exceeded `lineLimit`.
+  private(set) var droppedLineCount = 0
+  /// Total lines ever appended; also the next line id, so ids stay unique after trimming.
+  private(set) var appendedLineCount = 0
   fileprivate var operation: TartOperation?
 
+  /// Keep at most this many lines on screen…
   static let lineLimit = 5_000
+  /// …in blocks of this many lines.
+  static let blockSize = 250
 
   init(command: String) {
     self.command = command
   }
 
   var isRunning: Bool { exitCode == nil }
+  var lineCount: Int { blocks.reduce(0) { $0 + $1.lines.count } }
+  var lines: [Line] { blocks.flatMap(\.lines) }
 
-  fileprivate func append(_ text: String, isError: Bool) {
-    lines.append(Line(id: lines.count, text: text, isError: isError))
-    if lines.count > Self.lineLimit { lines.removeFirst(lines.count - Self.lineLimit) }
+  func append(_ text: String, isError: Bool) {
+    let line = Line(id: appendedLineCount, text: text, isError: isError)
+    appendedLineCount += 1
+    if let last = blocks.indices.last, blocks[last].lines.count < Self.blockSize {
+      blocks[last].lines.append(line)
+    } else {
+      blocks.append(Block(id: line.id, lines: [line]))
+    }
+    // Drop whole blocks, which removes lines in chunks instead of one by one.
+    while lineCount > Self.lineLimit, blocks.count > 1 {
+      droppedLineCount += blocks.removeFirst().lines.count
+    }
   }
 
   fileprivate func finish(_ code: Int32, message: String?) {
-    if code != 0, let message, !message.isEmpty, !lines.contains(where: { $0.text == message }) {
+    if code != 0, let message, !message.isEmpty, blocks.last?.lines.contains(where: { $0.text == message }) != true {
       append(message, isError: true)
     }
     exitCode = code
@@ -209,7 +235,7 @@ private struct ConsoleOutput: View {
         .frame(maxWidth: .infinity, alignment: .leading)
       }
       .background(Color(nsColor: .textBackgroundColor))
-      .onChange(of: session.runs.last?.lines.count) {
+      .onChange(of: session.runs.last?.appendedLineCount) {
         proxy.scrollTo("bottom", anchor: .bottom)
       }
       .onChange(of: session.runs.count) {
@@ -237,19 +263,36 @@ private struct RunView: View {
           ExitCodeChip(code: code, duration: (run.finishedAt ?? .now).timeIntervalSince(run.startedAt))
         }
       }
-      if !run.lines.isEmpty {
-        Text(attributedOutput)
-          .font(.system(.callout, design: .monospaced))
-          .textSelection(.enabled)
-          .frame(maxWidth: .infinity, alignment: .leading)
+      if run.droppedLineCount > 0 {
+        Text("\(run.droppedLineCount) earlier lines not shown")
+          .font(.caption)
+          .foregroundStyle(.tertiary)
+      }
+      VStack(alignment: .leading, spacing: 0) {
+        ForEach(run.blocks) { block in
+          OutputBlockView(block: block)
+        }
       }
     }
   }
+}
 
-  private var attributedOutput: AttributedString {
+/// A block of console lines rendered as one selectable text. Equatable so SwiftUI skips blocks
+/// that didn't change when a new line arrives.
+private struct OutputBlockView: View, Equatable {
+  let block: ConsoleRun.Block
+
+  var body: some View {
+    Text(attributed)
+      .font(.system(.callout, design: .monospaced))
+      .textSelection(.enabled)
+      .frame(maxWidth: .infinity, alignment: .leading)
+  }
+
+  private var attributed: AttributedString {
     var result = AttributedString()
-    for (index, line) in run.lines.enumerated() {
-      var piece = AttributedString(line.text + (index == run.lines.count - 1 ? "" : "\n"))
+    for (index, line) in block.lines.enumerated() {
+      var piece = AttributedString(line.text + (index == block.lines.count - 1 ? "" : "\n"))
       if line.isError { piece.foregroundColor = .red }
       result += piece
     }
