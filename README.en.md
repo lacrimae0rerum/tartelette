@@ -280,14 +280,14 @@ sudo xcode-select -s /Applications/Xcode.app
 git clone https://github.com/lacrimae0rerum/tartelette.git
 cd tartelette
 make test       # TarteletteKit and app tests
-make run        # Release build into build/Tartelette.app, then opens it
+make run        # Release build into build.noindex/Tartelette.app, then opens it
 make install    # copies it to /Applications (pick another folder with INSTALL_DIR=…)
 ```
 
 | Command | What it does |
 |---------|--------------|
 | `make test` | Runs the TarteletteKit (Swift Testing) and app test suites |
-| `make build` | Release build into `build/Tartelette.app` |
+| `make build` | Release build into `build.noindex/Tartelette.app` (the `.noindex` suffix keeps Spotlight from listing it next to the installed app) |
 | `make run` | Builds and opens the app |
 | `make install` | Builds and installs it into `/Applications`, swapping out the previous copy atomically (`INSTALL_DIR=…` for another folder) |
 | `make uninstall` | Removes the installed app |
@@ -296,7 +296,7 @@ make install    # copies it to /Applications (pick another folder with INSTALL_D
 | `make assets` | Regenerates the app icon, menu bar icons and brand mark |
 | `make check-assets` | Checks that the committed brand assets match their renderer |
 | `make open` | Opens the project in Xcode |
-| `make clean` | Removes `build/`, `dist/` and the package's build cache |
+| `make clean` | Removes `build.noindex/`, `dist/` and the package's build cache |
 
 What you build on your Mac is ad-hoc signed for `arm64` and isn't quarantined, so it opens
 without the Gatekeeper step.

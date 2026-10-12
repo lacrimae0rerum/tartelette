@@ -3,8 +3,11 @@
 PROJECT        := Tartelette.xcodeproj
 SCHEME         := Tartelette
 CONFIGURATION ?= Release
-DERIVED_DATA   := build/DerivedData
-APP            := build/Tartelette.app
+# Spotlight skips folders whose name ends in .noindex, so local builds don't show up as extra
+# copies of the app in app search.
+BUILD          := build.noindex
+DERIVED_DATA   := $(BUILD)/DerivedData
+APP            := $(BUILD)/Tartelette.app
 INSTALL_DIR   ?= /Applications
 INSTALLED_APP  := $(INSTALL_DIR)/Tartelette.app
 DIST           := dist
@@ -48,7 +51,7 @@ test-app:
 	xcodebuild test -project $(PROJECT) -scheme $(SCHEME) -destination 'platform=macOS' \
 		-derivedDataPath $(DERIVED_DATA) -quiet
 
-## Build the app bundle into build/Tartelette.app.
+## Build the app bundle into build.noindex/Tartelette.app.
 build:
 	xcodebuild -project $(PROJECT) -scheme $(SCHEME) -configuration $(CONFIGURATION) \
 		-derivedDataPath $(DERIVED_DATA) -quiet build
@@ -86,8 +89,9 @@ install: build check-install-dir
 uninstall: check-install-dir
 	rm -rf "$(INSTALLED_APP)"
 
-## Package build/Tartelette.app for distribution into dist/: a drag-to-install disk image (with the
-## app icon as its volume icon), a zip, and SHA256SUMS.txt — all named after the app's version.
+## Package build.noindex/Tartelette.app for distribution into dist/: a drag-to-install disk image
+## (with the app icon as its volume icon), a zip, and SHA256SUMS.txt — all named after the app's
+## version.
 package: build
 	@set -e; \
 	codesign --verify --deep --strict "$(APP)"; \
@@ -116,5 +120,7 @@ release: check-assets test package
 open:
 	open $(PROJECT)
 
+## Remove build products, packages and the package's build cache. build/ is the output folder
+## used before build.noindex/.
 clean:
-	rm -rf build $(DIST) TarteletteKit/.build
+	rm -rf $(BUILD) build $(DIST) TarteletteKit/.build

@@ -5,6 +5,14 @@ All notable changes to Tartelette are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Build output**: `make` now builds into `build.noindex/` instead of `build/`. Spotlight
+  doesn't index folders ending in `.noindex`, so local builds no longer appear as extra copies
+  of Tartelette in app search. `make clean` also removes the old `build/` folder.
+
 ## [1.0.0] - 2026-10-09
 
 First public release. Requires an Apple silicon Mac with macOS 14 Sonoma or later and Tart 2.27
@@ -40,4 +48,5 @@ or later.
 - **Distribution**: drag-to-install disk image and zip with SHA-256 checksums, `make package` and
   `make release` targets, and continuous integration for builds and tests.
 
+[Unreleased]: https://github.com/lacrimae0rerum/tartelette/compare/v1.0.0...HEAD
 [1.0.0]: https://github.com/lacrimae0rerum/tartelette/releases/tag/v1.0.0
