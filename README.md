@@ -296,14 +296,14 @@ sudo xcode-select -s /Applications/Xcode.app
 git clone https://github.com/lacrimae0rerum/tartelette.git
 cd tartelette
 make test       # tests de TarteletteKit y de la app
-make run        # compila la versión Release en build/Tartelette.app y la abre
+make run        # compila la versión Release en build.noindex/Tartelette.app y la abre
 make install    # la copia a /Applications (cambia la carpeta con INSTALL_DIR=…)
 ```
 
 | Comando | Qué hace |
 |---------|----------|
 | `make test` | Ejecuta los tests de TarteletteKit (Swift Testing) y los de la app |
-| `make build` | Compila la versión Release en `build/Tartelette.app` |
+| `make build` | Compila la versión Release en `build.noindex/Tartelette.app` (el sufijo `.noindex` evita que Spotlight la muestre junto a la app instalada) |
 | `make run` | Compila y abre la app |
 | `make install` | Compila y la instala en `/Applications` sustituyendo la anterior de forma atómica (`INSTALL_DIR=…` para otra carpeta) |
 | `make uninstall` | Borra la app instalada |
@@ -312,7 +312,7 @@ make install    # la copia a /Applications (cambia la carpeta con INSTALL_DIR=�
 | `make assets` | Regenera el icono de la app, los iconos de la barra de menús y el logotipo |
 | `make check-assets` | Comprueba que los recursos de marca guardados coinciden con su generador |
 | `make open` | Abre el proyecto en Xcode |
-| `make clean` | Borra `build/`, `dist/` y la caché de compilación del paquete |
+| `make clean` | Borra `build.noindex/`, `dist/` y la caché de compilación del paquete |
 
 Lo que compilas en tu Mac se firma de forma local («ad hoc») para `arm64` y no lleva marca de
 cuarentena, así que se abre sin el paso de Gatekeeper.

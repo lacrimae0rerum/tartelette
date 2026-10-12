@@ -1,4 +1,5 @@
 build/
+build.noindex/
 dist/
 .build/
 .swiftpm/
