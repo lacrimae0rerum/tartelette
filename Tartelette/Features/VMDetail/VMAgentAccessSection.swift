@@ -46,7 +46,10 @@ struct VMAgentAccessSection: View {
     } header: {
       Text("Agent Access")
     } footer: {
-      Text("Saved at once: AI agents connected to Tartelette see the change on their next request.")
+      // A VM an agent created has nothing to change here.
+      if creator == nil {
+        Text("Saved at once: AI agents connected to Tartelette see the change on their next request.")
+      }
     }
   }
 }

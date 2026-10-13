@@ -27,12 +27,12 @@ struct VMRow: View {
           .foregroundStyle(.secondary)
           .help("Live clipboard sync is on")
       }
-      if let agentNote {
+      if let agentIndicator {
         Image(systemName: "sparkles")
           .font(.caption2)
-          .foregroundStyle(.secondary)
-          .help(agentNote)
-          .accessibilityLabel(agentNote)
+          .foregroundStyle(agentIndicator.tint)
+          .help(agentIndicator.help)
+          .accessibilityLabel(agentIndicator.help)
       }
       StatusDot(state: vm.state)
     }
@@ -54,14 +54,10 @@ struct VMRow: View {
   }
 
   /// Set while agents can reach this VM: shared with them, or created by one.
-  private var agentNote: String? {
+  private var agentIndicator: AgentIndicator? {
     let agents = model.agents
-    guard agents.enabled else { return nil }
-    if let creator = agents.creator(of: vm.name) {
-      return "Created by \(creator.client ?? "an agent"), which fully controls it"
-    }
-    let access = agents.access(for: vm.name)
-    return access == .none ? nil : "Shared with AI agents: \(access.title)"
+    return AgentIndicator(
+      enabled: agents.enabled, creator: agents.creator(of: vm.name), access: agents.access(for: vm.name))
   }
 
   private var subtitle: String {

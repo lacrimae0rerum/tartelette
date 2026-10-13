@@ -14,15 +14,9 @@ struct AgentSettings: View {
     let agents = model.agents
 
     Form {
-      if let loadError = agents.loadError {
+      if let problem = agents.loadError {
         Section {
-          InlineNotice(
-            .error,
-            "Tartelette can't read its agent settings, so agents can't use any VM. Fix agents.json or reset it.")
-          Text(loadError)
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .textSelection(.enabled)
+          AgentSettingsProblemNotice(problem)
           HStack {
             Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([agents.paths.policyFile]) }
             Spacer()
@@ -87,6 +81,31 @@ struct AgentSettings: View {
       Button("Reset", role: .destructive) { agents.resetToDefaults() }
     } message: {
       Text("agents.json is replaced with the defaults: agents are turned off and no VM is shared.")
+    }
+  }
+}
+
+// MARK: - Damaged settings
+
+/// What's wrong with `agents.json` in a sentence, with the technical details on demand.
+struct AgentSettingsProblemNotice: View {
+  let problem: AgentSettingsProblem
+  @State private var showsDetails: Bool
+
+  init(_ problem: AgentSettingsProblem, showsDetails: Bool = false) {
+    self.problem = problem
+    _showsDetails = State(initialValue: showsDetails)
+  }
+
+  var body: some View {
+    InlineNotice(.error, "\(problem.summary) Until you fix or reset it, agents can't use any VM.")
+    DisclosureGroup("Details", isExpanded: $showsDetails) {
+      Text(problem.details)
+        .font(.caption.monospaced())
+        .foregroundStyle(.secondary)
+        .textSelection(.enabled)
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
   }
 }
@@ -205,6 +224,7 @@ private struct ActivitySection: View {
 
 private struct ActivityRow: View {
   let entry: AgentAuditEntry
+  @Environment(\.colorScheme) private var colorScheme
 
   var body: some View {
     HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -227,7 +247,7 @@ private struct ActivityRow: View {
           .foregroundStyle(.tertiary)
       }
       Spacer(minLength: 8)
-      Pill(title: entry.outcome.title, tint: entry.outcome.tint)
+      Pill(title: entry.outcome.title, tint: entry.outcome.tint(in: colorScheme))
     }
     .accessibilityElement(children: .combine)
   }
