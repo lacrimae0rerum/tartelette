@@ -116,10 +116,22 @@ struct StopOptionsSheet: View {
     case (.running, .suspend):
       TartCommand.suspend(name: vmName).commandLine
     case (.running, .shutdown):
-      model.library.pid(of: vmName).map { "kill -USR2 \($0)  # asks “\(vmName)” to shut down" }
+      Self.shutdownCommandLine(vmName: vmName, os: model.library.os(of: vmName), pid: model.library.pid(of: vmName))
     default:
       nil
     }
+  }
+
+  /// What Shut Down does: a macOS guest is asked through the guest agent, with SIGUSR2 to
+  /// `tart run` (`pid`) when the agent doesn't answer; other guests get SIGUSR2.
+  nonisolated static func shutdownCommandLine(vmName: String, os: VMOperatingSystem, pid: Int32?) -> String? {
+    let signal = pid.map { "kill -USR2 \($0)" }
+    guard GuestShutdown.requestsInGuest(for: os) else {
+      return signal.map { "\($0)  # asks “\(vmName)” to shut down" }
+    }
+    let request = TartCommand.exec(ExecOptions(name: vmName, command: GuestShutdown.macOSCommand)).commandLine
+    return ["\(request)  # asks “\(vmName)” to shut down", signal.map { "\($0)  # if the guest agent doesn't answer" }]
+      .compactMap(\.self).joined(separator: "\n")
   }
 
   private func perform(_ state: VMState) {

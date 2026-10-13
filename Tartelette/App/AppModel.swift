@@ -95,10 +95,16 @@ final class AppModel {
     }
   }
 
-  /// Asks VMs started by this app to shut down (used on quit when enabled in Settings).
-  func requestShutdownOfLaunchedVMs() {
-    for name in library.launched.keys where library.isRunning(name) {
-      library.requestShutdown(name)
-    }
+  /// Asks the running VMs this app started to shut down, all at once (used on quit when enabled in
+  /// Settings): macOS guests through the guest agent, with SIGUSR2 when it doesn't answer; other
+  /// guests with SIGUSR2.
+  ///
+  /// - Returns: A task that ends once every guest was asked, within `GuestShutdown.requestAllLimit`
+  ///   even if a request hangs; nil when no VM needs asking.
+  func requestShutdownOfLaunchedVMs() -> Task<Void, Never>? {
+    let targets = VMLibrary.vmsToShutDownOnQuit(launched: library.launched.keys, vms: library.vms)
+      .compactMap(library.shutdownTarget)
+    guard !targets.isEmpty else { return nil }
+    return Task { _ = await GuestShutdown.requestAll(targets) }
   }
 }

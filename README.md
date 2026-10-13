@@ -164,7 +164,7 @@ desinstalar Tartelette no las toca.
 |------|-----------|---------------------|
 | Crear | VM nueva desde una imagen de Cirrus Labs, desde un IPSW de macOS (el más reciente, un archivo o una URL), VM Linux vacía, importar un `.tvm` | `clone`, `create --from-ipsw`, `create --linux`, `import` |
 | Arrancar | En una ventana, sin ventana, con VNC (Compartir Pantalla o el integrado), en modo Recuperación o con cualquier opción de arranque guardada | `run` y todas sus opciones |
-| Controlar | Pedir el apagado (ordenado), apagar, suspender, forzar la salida, mostrar la ventana de la VM | `SIGUSR2`, `stop`, `suspend` |
+| Controlar | Pedir el apagado (ordenado: a los invitados macOS se les pide a través del Tart Guest Agent, con `SIGUSR2` si no responde; a los Linux, con `SIGUSR2`), apagar, suspender, forzar la salida, mostrar la ventana de la VM | `exec`, `SIGUSR2`, `stop`, `suspend` |
 | Configurar | CPU, memoria, pantalla (pt/px, ajuste automático), ampliar o sustituir el disco, nueva MAC o número de serie | `set` |
 | Opciones de arranque | Red (compartida, puente, Softnet con allow/block/expose, solo host), carpetas compartidas, discos adicionales (imagen, VM en caché, NBD), caché y sincronización del disco raíz, Rosetta, virtualización anidada, consola serie, dispositivos de audio/USB/portapapeles/entrada, aprovisionamiento en el primer arranque | `run --net-* --dir --disk --root-disk-opts --rosetta --nested --serial …` |
 | Acceder | Dirección IP (DHCP, ARP o agente del invitado), shell del invitado en Terminal, SSH, consola de comandos | `ip`, `exec -it`, `exec` |

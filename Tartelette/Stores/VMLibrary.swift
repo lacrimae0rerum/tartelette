@@ -287,15 +287,39 @@ final class VMLibrary {
     }
   }
 
-  /// Asks the guest OS to shut down cleanly (SIGUSR2 to `tart run`; the guest may show a dialog).
+  /// Asks the guest OS to shut down cleanly.
+  ///
+  /// A macOS guest is asked from the inside through the Tart Guest Agent (never SSH), since a
+  /// headless one ignores SIGUSR2; it gets SIGUSR2 only when the agent doesn't take the request.
+  /// Other guests get SIGUSR2 to `tart run` (the guest may show a dialog). See `GuestShutdown`.
   func requestShutdown(_ name: String) {
-    guard let client = context.client else { return }
-    do {
-      try client.send(.requestGuestShutdown, toVM: name)
-      refreshSoon(after: .seconds(2))
-    } catch {
-      navigation.show(error: error, title: "Couldn't shut down “\(name)”")
+    guard let target = shutdownTarget(name) else { return }
+    Task { [weak self] in
+      do {
+        _ = try await GuestShutdown.request(for: target.os, through: target.transport, stopRequest: target.stopRequest)
+        self?.refreshSoon(after: .seconds(2))
+      } catch {
+        self?.navigation.show(error: error, title: "Couldn't shut down “\(name)”")
+      }
     }
+  }
+
+  /// How `name`'s guest is asked to shut down: through the Tart Guest Agent (never SSH), or with
+  /// SIGUSR2 to `tart run`. Nil until `tart` is found.
+  func shutdownTarget(_ name: String) -> GuestShutdown.Target? {
+    guard let client = context.client, let environment = context.environment else { return nil }
+    let transport = TartExecTransport(
+      vmName: name, tartExecutable: environment.executable, environment: environment.variables(forRun: false),
+      runner: context.runner)
+    return GuestShutdown.Target(name: name, os: os(of: name), transport: transport) {
+      try client.send(.requestGuestShutdown, toVM: name)
+    }
+  }
+
+  /// The VMs to ask to shut down on quit: those this app started that are still running, by name.
+  nonisolated static func vmsToShutDownOnQuit(launched: some Sequence<String>, vms: [VMListing]) -> [String] {
+    let running = Set(vms.filter(\.state.isRunning).map(\.name))
+    return launched.filter(running.contains).sorted()
   }
 
   /// `tart stop`: powers the VM off after the profile's timeout. On a suspended VM this discards
