@@ -7,7 +7,7 @@ import TarteletteKit
 ///
 /// Views get it with `@Environment(AppModel.self) private var model` and use the stores:
 /// `model.library`, `model.jobs`, `model.metrics`, `model.clipboard`, `model.profiles`,
-/// `model.registries`, `model.settings`, `model.navigation`, `model.context`.
+/// `model.registries`, `model.agents`, `model.settings`, `model.navigation`, `model.context`.
 @Observable
 final class AppModel {
   let settings: AppSettings
@@ -19,6 +19,7 @@ final class AppModel {
   let clipboard: ClipboardCenter
   let metrics: MetricsCenter
   let registries: RegistryStore
+  let agents: AgentAccessStore
 
   /// Called when anything shown in the Dock (badge, progress) may have changed.
   var onDockStateChange: () -> Void = {}
@@ -46,6 +47,7 @@ final class AppModel {
     self.clipboard = clipboard
     self.metrics = metrics
     self.registries = RegistryStore(jobs: jobs, settings: settings)
+    self.agents = AgentAccessStore(tartPaths: { context.paths })
 
     context.reload(settings: settings)
     library.onChange.append { [weak clipboard, weak metrics] changes in
@@ -63,6 +65,7 @@ final class AppModel {
     library.startPolling()
     metrics.start()
     registries.refresh()
+    agents.startWatching()
     Task {
       await library.refresh()
       clipboard.adoptRunningVMs()
