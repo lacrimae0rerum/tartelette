@@ -37,7 +37,7 @@ public enum AgentOperation: String, Sendable, Hashable, CaseIterable {
 }
 
 /// The access an agent actually has to a VM: the user's level, or `owned` for a VM an agent created.
-public enum EffectiveAccess: String, Sendable, Hashable, CaseIterable {
+public enum EffectiveAccess: String, Sendable, Hashable, CaseIterable, Codable {
   case none
   case read
   case operate
