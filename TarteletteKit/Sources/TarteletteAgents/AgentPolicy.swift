@@ -35,7 +35,8 @@ public struct AgentLimits: Codable, Sendable, Equatable {
   public var execTimeoutMaxSeconds: Int
   /// Output kept per stream (stdout, stderr) of a command.
   public var maxOutputBytes: Int
-  /// Largest file an agent may read from or write to a VM.
+  /// Largest file an agent may write to a VM. Reads aren't capped by it: agents read files in
+  /// pages of at most `maxOutputBytes`.
   public var maxFileBytes: Int
   /// How many agent-created VMs may exist at once.
   public var maxAgentVMs: Int
