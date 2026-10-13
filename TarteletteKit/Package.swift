@@ -8,7 +8,10 @@ let package = Package(
     .macOS(.v14)
   ],
   products: [
-    .library(name: "TarteletteKit", targets: ["TarteletteKit"])
+    .library(name: "TarteletteKit", targets: ["TarteletteKit"]),
+  ],
+  dependencies: [
+    .package(url: "https://github.com/modelcontextprotocol/swift-sdk.git", from: "0.12.1")
   ],
   targets: [
     // Domain: value types, command model and ports. No I/O.
@@ -21,6 +24,9 @@ let package = Package(
     .target(name: "TarteletteGuest", dependencies: ["TarteletteCore"]),
     // Agent access: per-VM policy, agent VM registry, authorization, audit log and tool logic.
     .target(name: "TarteletteAgents", dependencies: ["TarteletteCore", "TarteletteCLI", "TarteletteGuest"]),
+    // MCP server: exposes the agent tools over the Model Context Protocol. Not part of the umbrella
+    // module, so the app doesn't link the MCP SDK.
+    .target(name: "TarteletteMCP", dependencies: ["TarteletteAgents", .product(name: "MCP", package: "swift-sdk")]),
     // Umbrella module imported by the app.
     .target(name: "TarteletteKit", dependencies: [
       "TarteletteCore", "TarteletteCLI", "TarteletteMetrics", "TarteletteGuest", "TarteletteAgents",
@@ -30,5 +36,8 @@ let package = Package(
     .testTarget(name: "TarteletteMetricsTests", dependencies: ["TarteletteMetrics"]),
     .testTarget(name: "TarteletteGuestTests", dependencies: ["TarteletteGuest"]),
     .testTarget(name: "TarteletteAgentsTests", dependencies: ["TarteletteAgents"]),
+    .testTarget(name: "TarteletteMCPTests", dependencies: [
+      "TarteletteMCP", "TarteletteAgents", .product(name: "MCP", package: "swift-sdk"),
+    ]),
   ]
 )
