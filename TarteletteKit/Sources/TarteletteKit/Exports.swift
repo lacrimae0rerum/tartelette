@@ -1,3 +1,4 @@
+@_exported import TarteletteAgents
 @_exported import TarteletteCLI
 @_exported import TarteletteCore
 @_exported import TarteletteGuest

@@ -19,13 +19,16 @@ let package = Package(
     .target(name: "TarteletteMetrics", dependencies: ["TarteletteCore"]),
     // Adapter: guest command transports, guest metrics and clipboard bridge.
     .target(name: "TarteletteGuest", dependencies: ["TarteletteCore"]),
+    // Agent access: per-VM policy, agent VM registry, authorization and audit log.
+    .target(name: "TarteletteAgents", dependencies: ["TarteletteCore"]),
     // Umbrella module imported by the app.
     .target(name: "TarteletteKit", dependencies: [
-      "TarteletteCore", "TarteletteCLI", "TarteletteMetrics", "TarteletteGuest",
+      "TarteletteCore", "TarteletteCLI", "TarteletteMetrics", "TarteletteGuest", "TarteletteAgents",
     ]),
     .testTarget(name: "TarteletteCoreTests", dependencies: ["TarteletteCore"]),
     .testTarget(name: "TarteletteCLITests", dependencies: ["TarteletteCLI"]),
     .testTarget(name: "TarteletteMetricsTests", dependencies: ["TarteletteMetrics"]),
     .testTarget(name: "TarteletteGuestTests", dependencies: ["TarteletteGuest"]),
+    .testTarget(name: "TarteletteAgentsTests", dependencies: ["TarteletteAgents"]),
   ]
 )
