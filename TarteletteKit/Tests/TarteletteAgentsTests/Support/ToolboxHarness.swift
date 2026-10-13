@@ -1,4 +1,5 @@
 import Foundation
+import TarteletteGuest
 import Testing
 import os
 
@@ -90,6 +91,18 @@ struct ToolboxHarness {
     AgentToolbox(
       client: tart.client, agentPaths: agentPaths, clientName: Self.clientName,
       guestReadiness: guest.readiness, clock: clock.clock)
+  }
+
+  /// The toolbox, reaching every guest through `transport` instead of `tart exec`.
+  func toolbox(guest transport: any GuestTransport) -> AgentToolbox {
+    AgentToolbox(
+      client: tart.client, agentPaths: agentPaths, clientName: Self.clientName,
+      guestReadiness: guest.readiness, guestTransport: { _ in transport }, clock: clock.clock)
+  }
+
+  /// The audit log file's raw contents.
+  var auditLogText: String {
+    (try? String(contentsOf: agentPaths.auditLogFile, encoding: .utf8)) ?? ""
   }
 
   func savePolicy(_ policy: AgentPolicy) throws {

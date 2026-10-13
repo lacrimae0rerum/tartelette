@@ -6,6 +6,9 @@ import TarteletteGuest
 /// Whether a running VM's guest agent answers. Returns false instead of throwing.
 public typealias AgentGuestReadinessCheck = @Sendable (_ vm: String) async -> Bool
 
+/// Builds the transport that runs commands in a VM's guest.
+public typealias AgentGuestTransportFactory = @Sendable (_ vm: String) -> any GuestTransport
+
 /// The passage of time for the toolbox's waits, injectable so tests don't wait in real time.
 public struct AgentClock: Sendable {
   public var now: @Sendable () -> ContinuousClock.Instant
@@ -34,20 +37,25 @@ public struct AgentToolbox: Sendable {
   /// The agent client's name, recorded in the audit log.
   public let clientName: String?
   let guestReadiness: AgentGuestReadinessCheck
+  let guestTransport: AgentGuestTransportFactory
   let clock: AgentClock
 
-  /// - Parameter guestReadiness: Defaults to `tartExecReadiness(environment:)` for the client's Tart.
+  /// - Parameters:
+  ///   - guestReadiness: Defaults to `tartExecReadiness(environment:)` for the client's Tart.
+  ///   - guestTransport: Defaults to `tartExecTransport(environment:)` for the client's Tart.
   public init(
     client: TartClient,
     agentPaths: AgentPaths = .standard,
     clientName: String? = nil,
     guestReadiness: AgentGuestReadinessCheck? = nil,
+    guestTransport: AgentGuestTransportFactory? = nil,
     clock: AgentClock = .system
   ) {
     self.client = client
     self.agentPaths = agentPaths
     self.clientName = clientName
     self.guestReadiness = guestReadiness ?? Self.tartExecReadiness(environment: client.environment)
+    self.guestTransport = guestTransport ?? Self.tartExecTransport(environment: client.environment)
     self.clock = clock
   }
 
@@ -73,12 +81,22 @@ public struct AgentToolbox: Sendable {
     environment: TartEnvironment,
     runner: any ProcessRunning = ProcessRunner()
   ) -> AgentGuestReadinessCheck {
+    let transport = tartExecTransport(environment: environment, runner: runner)
+    return { name in
+      let output = try? await transport(name).run(["true"], timeout: .seconds(5))
+      return output?.succeeded == true
+    }
+  }
+
+  /// Reaches guests through `tart exec`, i.e. the Tart Guest Agent, never SSH.
+  public static func tartExecTransport(
+    environment: TartEnvironment,
+    runner: any ProcessRunning = ProcessRunner()
+  ) -> AgentGuestTransportFactory {
     { name in
-      let transport = TartExecTransport(
+      TartExecTransport(
         vmName: name, tartExecutable: environment.executable, environment: environment.variables(forRun: false),
         runner: runner)
-      let output = try? await transport.run(["true"], timeout: .seconds(5))
-      return output?.succeeded == true
     }
   }
 
