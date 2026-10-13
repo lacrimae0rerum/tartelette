@@ -7,6 +7,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **AI agents (MCP)**: `tartelette-mcp`, an MCP server embedded in the app, lets AI agents on the
+  Mac (Claude Code, Codex, Cursor…) use the Tart VMs you share with them. Agents launch it over
+  stdio, so nothing listens on a network port and it works while the app is closed. It's off by
+  default: turn it on in **Settings › Agents**, then share each VM in its **Configuration** tab as
+  Read, Operate or Template. Nine tools list and inspect VMs, start and stop them, clone
+  disposable sandboxes from Template VMs, run commands and read or write files through the Tart
+  Guest Agent. Agents can only delete VMs they created, calls have limits (timeouts, output and
+  file sizes, number of agent VMs), and every call is logged to
+  `~/Library/Logs/Tartelette/agents.log` and shown in Settings, never with command input or file
+  contents.
+
 ### Changed
 
 - **Build output**: `make` now builds into `build.noindex/` instead of `build/`. Spotlight

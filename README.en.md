@@ -28,7 +28,7 @@ exactly what the CLI does. Every sheet shows the equivalent `tart …` command, 
 | **macOS** | macOS 14 Sonoma or later | Tested on macOS 26.7 (Tahoe) and macOS 14.8 (Sonoma). On macOS 14, Tart is installed from its official download rather than Homebrew (see [Install Tart](#1-install-tart)), and Softnet networking isn't available. |
 | **Tart** | 2.27 or later | The clipboard bridge, the console and guest metrics use `tart exec`, added in Tart 2.27.0. Tested with Tart 2.40.1. |
 | **Virtual machines** | macOS and Linux (`arm64`) | Apple allows at most two macOS VMs running at a time. |
-| **Inside the VM** | Tart Guest Agent | Needed for the clipboard, the console and guest metrics. Preinstalled in the Cirrus Labs `*-base`, `*-xcode` and Linux images. On macOS, the clipboard also needs a logged-in user; on Linux, a desktop with `wl-clipboard` or `xclip`/`xsel`. |
+| **Inside the VM** | Tart Guest Agent | Needed for the clipboard, the console, guest metrics and the [AI agent](#ai-agents-mcp) tools. Preinstalled in the Cirrus Labs `*-base`, `*-xcode` and Linux images. On macOS, the clipboard also needs a logged-in user; on Linux, a desktop with `wl-clipboard` or `xclip`/`xsel`. |
 | **Building** (optional) | Xcode 26 or later | Only if you build it yourself: see [Build from source](#build-from-source). |
 
 ## Install
@@ -89,7 +89,9 @@ remove the quarantine flag your browser added to the download:
 xattr -dr com.apple.quarantine /Applications/Tartelette.app
 ```
 
-Only do this for copies downloaded from this repository, ideally after
+Also do this step if you'll use [AI agents](#ai-agents-mcp) with a downloaded copy: while
+`tartelette-mcp` carries the flag, macOS kills it when it's launched. Only do this for copies downloaded from this repository,
+ideally after
 [verifying the download](#verify-the-download). To skip this step altogether, either
 [install from the Terminal](#install-from-the-terminal) (files downloaded with `curl` aren't
 quarantined) or [build it yourself](#build-from-source) (what you build on your Mac never is).
@@ -164,6 +166,7 @@ uninstalling Tartelette doesn't touch them.
 | Registries | Log in/out; see Keychain, Docker config and environment credentials | `login --password-stdin`, `logout` |
 | Storage | TART_HOME usage, per-VM allocation, cache breakdown, prune by age/budget/GC | `prune` |
 | Monitor | Host CPU, memory, pressure, swap, thermal state; per-VM CPU (guest vs Tart), memory, disk I/O and power; guest CPU, load, memory, disk and uptime | — |
+| AI agents | Let the agents on your Mac (Claude Code, Codex, Cursor…) use the VMs you share: start them, run commands, copy files and clone disposable VMs. See [AI agents](#ai-agents-mcp) | — |
 
 Everywhere else: menu bar extra with live VM states, Dock badge (running VMs), Dock menu, Dock
 progress for downloads, notifications when long jobs finish, keyboard shortcuts for every action.
@@ -234,6 +237,114 @@ Good to know:
 - Only one Tartelette runs at a time: launching a second copy quits it and brings the first one
   forward, so two copies never sync the same VM against each other.
 
+## AI agents (MCP)
+
+Tartelette includes `tartelette-mcp`, an [MCP](https://modelcontextprotocol.io) server that lets
+the AI agents on your Mac (Claude Code, Codex, Cursor…) use the VMs you share with them: start
+them, run commands inside, copy files and clone disposable VMs to work in. The agent launches the
+server itself and talks to it over standard input and output: nothing listens on a network port,
+and it works while Tartelette is closed.
+
+It's **off by default**, and no VM is shared until you decide, one VM at a time.
+
+### Set it up
+
+1. In **Settings › Agents**, turn on **Let AI agents use Tartelette's VMs**.
+2. In the **Configuration** tab of each VM you want to share, pick its level under **Agent Access**
+   (the levels are explained in the next section).
+3. Add Tartelette to your agent. **Settings › Agents** shows the same, with buttons to copy it.
+
+   In Claude Code:
+
+   ```bash
+   claude mcp add tartelette -- /Applications/Tartelette.app/Contents/MacOS/tartelette-mcp
+   ```
+
+   In other MCP clients:
+
+   ```json
+   {
+     "mcpServers": {
+       "tartelette": {
+         "command": "/Applications/Tartelette.app/Contents/MacOS/tartelette-mcp"
+       }
+     }
+   }
+   ```
+
+**If you downloaded Tartelette with a browser**, also remove the quarantine flag from the whole
+bundle. While `tartelette-mcp` carries that flag, macOS kills it as soon as the agent launches it,
+and the agent reports that the server failed to start.
+
+```bash
+xattr -dr com.apple.quarantine /Applications/Tartelette.app
+```
+
+What you [install from the Terminal](#install-from-the-terminal) or
+[build yourself](#build-from-source) doesn't carry that flag.
+
+If you move Tartelette to another folder, set it up in your agent again. `tartelette-mcp --version`
+and `tartelette-mcp --help` also work from Terminal.
+
+### What an agent can do
+
+| Access | The agent can |
+|--------|---------------|
+| **None** (default) | Nothing: the VM isn't in its list |
+| **Read** | See the VM and its settings |
+| **Operate** | See it, start and stop it, run commands in it and copy files in and out |
+| **Template** | See it and clone disposable VMs from it, which the agent then fully controls (including deleting them) |
+
+Agents can only delete VMs they created; a VM later recreated under the same name isn't treated as
+theirs. When something isn't allowed (agents are off, the VM isn't shared, the VM isn't theirs…),
+the agent gets a message that explains why. On purpose, Tartelette doesn't offer the other
+direction: an agent running inside a VM can't control the Mac.
+
+### Tools and limits
+
+| Tool | What it does |
+|------|--------------|
+| `list_vms` | Lists the shared VMs, with their state and access level |
+| `vm_info` | Shows a VM's state and settings |
+| `start_vm` | Starts a VM headless and, if asked, waits until the Tart Guest Agent answers |
+| `stop_vm` | Asks the guest to shut down and powers it off if it doesn't in time; with `force`, powers it off at once |
+| `create_sandbox` | Clones a stopped **Template** VM (generating a name when none is given) and can start it |
+| `delete_vm` | Deletes a VM an agent created |
+| `exec` | Runs a command in a login shell in the guest, with optional standard input and a timeout |
+| `read_file` | Reads a guest file in pages, as text or base64 |
+| `write_file` | Writes a file (text or base64), creates missing folders and verifies it with SHA-256 |
+
+| Limit | Default |
+|-------|---------|
+| `exec` timeout | 120 s (up to 1800 s) |
+| Output | 256 KiB for standard output and another 256 KiB for standard error in `exec`; 256 KiB per page in `read_file` |
+| Files written by `write_file` | Up to 50 MiB |
+| VMs created by agents | 4 at most |
+| Running macOS VMs | 2 (Apple's limit) |
+
+Agents reach the guest only through the Tart Guest Agent, preinstalled in the Cirrus Labs images
+(Linux ones included); they don't use SSH.
+
+**Known limitation.** Arguments that start with `data:` and contain a comma (for example, a file
+whose content starts that way) are refused, because the MCP SDK would alter them. Send that
+content base64-encoded.
+
+Tested with Claude Code on macOS 26.7 and Tart 2.40.1, using the Cirrus Labs Ubuntu 24.04 image:
+listing VMs, cloning a disposable VM from a **Template** VM, starting it (the guest agent answered
+in about 5 seconds), running commands, writing and reading files, and stopping and deleting it.
+
+### Log and settings
+
+- **Log.** Every call is logged (time, agent client, tool, VM and outcome) in
+  `~/Library/Logs/Tartelette/agents.log`. **Settings › Agents** shows the latest 50 and reveals
+  the log with **Show Log in Finder**. Commands' standard input and file contents are never logged.
+- **Settings.** They live in `~/Library/Application Support/Tartelette/agents.json` and apply
+  immediately: agents see every change on their next call.
+- **Damaged file.** If `agents.json` is damaged, Tartelette never overwrites it silently, and
+  meanwhile agents can't use any VM.
+  **Settings › Agents** offers to reset it with **Reset Agent Settings…**, which turns agents off
+  and stops sharing every VM.
+
 ## Permissions macOS asks for
 
 | When | What macOS asks | What to do |
@@ -257,6 +368,10 @@ Good to know:
   the optional credentials in **Settings › Registries & Network** are stored in the macOS
   Keychain; they reach `ssh` through an askpass helper and `tart` as `TART_REGISTRY_*` variables,
   never as command-line arguments.
+- **AI agents, only if you turn them on.** `tartelette-mcp` talks to the agent that launches it
+  only over standard input and output and doesn't listen on any network port (it includes the MCP
+  SDK, which ships network transports it doesn't use). The call log never records commands'
+  standard input or file contents.
 - **Not sandboxed, on purpose.** The app has to run `tart`, read `~/.tart` and inspect VM
   processes to measure their usage — things the macOS sandbox doesn't allow.
 
@@ -267,7 +382,9 @@ needs macOS 15.6 or later ([Xcode system requirements](https://developer.apple.c
 The app you build runs on macOS 14 or later. The project uses build settings introduced in Xcode 26 (default `MainActor`
 isolation and approachable concurrency) and an Icon Composer app icon (`.icon`), so older Xcode
 versions can't build it. Continuous integration builds the app and runs every test with Xcode 26.0.1
-and 26.6. There are no third-party dependencies.
+and 26.6. The app has no third-party dependencies; the `tartelette-mcp` server uses the
+[MCP Swift SDK](https://github.com/modelcontextprotocol/swift-sdk) and
+[swift-log](https://github.com/apple/swift-log).
 
 `xcodebuild` needs the full Xcode (the Command Line Tools alone aren't enough). If `make`
 complains, select it:
@@ -287,7 +404,7 @@ make install    # copies it to /Applications (pick another folder with INSTALL_D
 | Command | What it does |
 |---------|--------------|
 | `make test` | Runs the TarteletteKit (Swift Testing) and app test suites |
-| `make build` | Release build into `build.noindex/Tartelette.app` (the `.noindex` suffix keeps Spotlight from listing it next to the installed app) |
+| `make build` | Release build, with `tartelette-mcp` inside, into `build.noindex/Tartelette.app` (the `.noindex` suffix keeps Spotlight from listing it next to the installed app) |
 | `make run` | Builds and opens the app |
 | `make install` | Builds and installs it into `/Applications`, swapping out the previous copy atomically (`INSTALL_DIR=…` for another folder) |
 | `make uninstall` | Removes the installed app |
@@ -304,14 +421,17 @@ without the Gatekeeper step.
 ## How it's built
 
 ```
-Tartelette.xcodeproj        app target (synchronized folder, local package dependency)
+Tartelette.xcodeproj        app and tartelette-mcp targets (synchronized folder, local package dependency)
 Tartelette/                 SwiftUI app: App/, Stores/, Features/, Components/, Support/
 TarteletteTests/            app tests
-TarteletteKit/              Swift package, no third-party dependencies
+TarteletteKit/              Swift package; only the MCP server has third-party dependencies
   TarteletteCore            domain: VM models, typed tart commands, parsers, ports
   TarteletteCLI             adapter: runs tart, streams progress, launches VMs, Keychain, Softnet
   TarteletteMetrics         adapter: host + per-VM process metrics, storage usage
   TarteletteGuest           adapter: tart exec/SSH transports, clipboard bridge, guest metrics
+  TarteletteAgents          agent access: per-VM policy, agent VMs, authorization, audit log, tool logic
+  TarteletteMCP             MCP server: exposes the agent tools (MCP Swift SDK)
+  TarteletteMCPServer       the tartelette-mcp executable agents launch over stdio
 Tools/BrandKit              code-drawn Liquid Glass app icon and menu bar icons
 ```
 
@@ -328,12 +448,14 @@ Tools/BrandKit              code-drawn Liquid Glass app icon and menu bar icons
 | Symptom | Fix |
 |---------|-----|
 | macOS won't open Tartelette, or says it "is damaged" | The app isn't notarized: follow [Open it for the first time](#3-open-it-for-the-first-time), or remove the quarantine flag with `xattr -dr com.apple.quarantine /Applications/Tartelette.app`. |
+| The AI agent says the `tartelette-mcp` server failed to start | In a copy downloaded with a browser, macOS blocks it because of the quarantine flag: remove the flag from the whole bundle with `xattr -dr com.apple.quarantine /Applications/Tartelette.app`. If you moved Tartelette, set it up in the agent again (see [AI agents](#ai-agents-mcp)). |
 | macOS says the app isn't supported on this type of Mac | It's an Intel Mac. Tart and Tartelette only run on Apple silicon. |
 | macOS asks every time you copy something, or nothing goes from the Mac to the VM | Allow Tartelette in **System Settings › Privacy & Security › Paste from Other Apps** (the **Open Settings…** button in the **Clipboard & Files** tab takes you there). |
 | "Tart isn't installed" | Install Tart (see [Install Tart](#1-install-tart)) or choose the binary with **Locate tart…** or in **Settings › General**. |
 | `brew install openai/tools/tart` says "Refusing to load formula … from untrusted tap" | Homebrew 6 or later: run `brew trust --formula openai/tools/tart openai/tools/softnet` first. |
 | Homebrew says "softnet: This formula does not run on macOS versions older than Sequoia" | You're on macOS 14: install Tart from its [official download](#1-install-tart). |
 | Clipboard says the guest agent is unavailable | Use a `*-base`/`*-xcode` image, or install `tart-guest-agent` in the guest; make sure a user is logged in. |
+| The AI agent says the VM's guest agent isn't answering | Agent tools reach the guest only through the Tart Guest Agent (not SSH): use a Cirrus Labs image, or install `tart-guest-agent` in the guest. If the VM just started, wait a few seconds (`start_vm` can wait until it answers). |
 | Softnet networking fails | **Settings › Registries & Network › Allow Softnet to Run…** (one-time administrator prompt). |
 | A third macOS VM won't start | Apple allows two macOS guests at a time. |
 | Exec/agent features fail with a source-built Tart | Source builds report `SNAPSHOT`, which the macOS guest agent rejects; use a released Tart. |
