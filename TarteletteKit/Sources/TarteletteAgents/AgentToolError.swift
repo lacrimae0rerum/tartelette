@@ -45,8 +45,8 @@ public enum AgentToolError: Error, Sendable, Equatable, LocalizedError {
     case .nameTaken(let name):
       "A VM named “\(name)” already exists. Choose another name."
     case .tooManyAgentVMs(let limit):
-      "Agents already have \(limit) VMs, the most Tartelette allows. Delete one with delete_vm, "
-        + "or raise the limit in Tartelette › Settings › Agents."
+      "Agents already have \(limit) VMs, the most Tartelette allows. Delete one you no longer need "
+        + "with delete_vm."
     case .sourceNotStopped(let name):
       "Stop “\(name)” before cloning it."
     case .macOSGuestLimitReached(let name):
@@ -55,8 +55,8 @@ public enum AgentToolError: Error, Sendable, Equatable, LocalizedError {
     case .timedOut(let name, let waitingFor, let seconds):
       "Timed out after \(seconds) seconds waiting for “\(name)” to \(waitingFor)."
     case .tartNotFound:
-      "Tartelette couldn't find the tart executable. Install Tart (brew install cirruslabs/cli/tart) "
-        + "or choose its location in Tartelette › Settings."
+      "Tartelette couldn't find the tart executable. Open Tartelette for the install command that works "
+        + "on this Mac, or choose Tart's location in Tartelette › Settings."
     case .startFailed(let name, let logTail):
       "“\(name)” failed to start." + (logTail.isEmpty ? "" : " The end of its log:\n\(logTail)")
     case .unidentifiedVM(let name):

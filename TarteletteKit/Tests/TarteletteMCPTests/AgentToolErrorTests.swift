@@ -92,7 +92,7 @@ struct AgentToolErrorTests {
 
     #expect(result.isError == true)
     guard case .text(let text, _, _)? = result.content.first else { Issue.record("no text content"); return }
-    #expect(text.hasPrefix("Tartelette couldn't find the tart executable. Install Tart"))
+    #expect(text.hasPrefix("Tartelette couldn't find the tart executable. Open Tartelette for the install command"))
   }
 
   @Test func letsCancellationThrough() async throws {
