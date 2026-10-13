@@ -262,6 +262,9 @@ no escucha en ningún puerto de red y funciona aunque Tartelette esté cerrada.
 
 Está **desactivado por defecto**, y ninguna VM se comparte hasta que tú lo decides, una por una.
 
+Si quieres que tu agente lo configure por su cuenta, indícale [`docs/AGENT_SETUP.md`](docs/AGENT_SETUP.md):
+comprueba los requisitos, añade Tartelette y te pide los pasos que solo puedes dar tú.
+
 ### Activarlo
 
 1. En **Settings › Agents**, activa **Let AI agents use Tartelette's VMs**.
