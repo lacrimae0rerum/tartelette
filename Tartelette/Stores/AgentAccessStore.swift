@@ -65,6 +65,22 @@ final class AgentAccessStore {
       .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
   }
 
+  /// Moves a VM's level to its new name after the user renamed it in Tartelette.
+  func renameVM(from oldName: String, to newName: String) {
+    update { policy in
+      guard let access = policy.vms.removeValue(forKey: oldName) else { return }
+      policy.vms[newName] = access
+    }
+  }
+
+  /// Forgets the levels of VMs the user deleted in Tartelette. The agent VM registry is left to
+  /// the helper, which prunes VMs that no longer exist.
+  func removeVMs(_ names: [String]) {
+    update { policy in
+      for name in names { policy.vms[name] = nil }
+    }
+  }
+
   /// Replaces `agents.json` with the defaults (agents off, nothing shared): the explicit way out
   /// of a file Tartelette can't read.
   func resetToDefaults() {

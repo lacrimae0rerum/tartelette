@@ -72,6 +72,7 @@ struct VMConfigurationTab: View {
         .disabled(isLocked)
       IdentitySection(draft: draft, os: os)
         .disabled(isLocked)
+      VMAgentAccessSection(vmName: vm.name)
 
       if !problems.isEmpty {
         Section {

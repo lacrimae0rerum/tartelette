@@ -47,16 +47,21 @@ final class VMLibrary {
   private let context: TartContext
   private let settings: AppSettings
   private let profiles: RunProfileStore
+  private let agents: AgentAccessStore
   private let jobs: JobCenter
   private let navigation: NavigationModel
   private var pollTask: Task<Void, Never>?
   private var refreshPending = false
   private var watcher: DirectoryWatcher?
 
-  init(context: TartContext, settings: AppSettings, profiles: RunProfileStore, jobs: JobCenter, navigation: NavigationModel) {
+  init(
+    context: TartContext, settings: AppSettings, profiles: RunProfileStore, agents: AgentAccessStore, jobs: JobCenter,
+    navigation: NavigationModel
+  ) {
     self.context = context
     self.settings = settings
     self.profiles = profiles
+    self.agents = agents
     self.jobs = jobs
     self.navigation = navigation
   }
@@ -427,10 +432,11 @@ final class VMLibrary {
     }
   }
 
-  /// `tart rename`; keeps the run profile and selection.
+  /// `tart rename`; keeps the run profile, agent access level and selection.
   func rename(_ name: String, to newName: String) async throws {
     try await perform(.rename(name: name, newName: newName))
     profiles.rename(from: name, to: newName)
+    agents.renameVM(from: name, to: newName)
     if navigation.selection == .vm(name) { navigation.selection = .vm(newName) }
   }
 
@@ -441,6 +447,7 @@ final class VMLibrary {
       throw JobError.failed("Stop \(running.map { "“\($0)”" }.joined(separator: ", ")) before deleting.")
     }
     try await perform(.delete(names: names))
+    agents.removeVMs(names)
     for name in names {
       profiles.remove(name)
       if navigation.selection == .vm(name) { navigation.selection = .dashboard }

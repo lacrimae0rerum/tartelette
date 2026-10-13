@@ -123,4 +123,30 @@ final class AgentAccessStoreTests {
     store.refreshActivity(limit: 2)
     #expect(store.recentActivity.map(\.tool) == ["exec", "start_vm"])
   }
+
+  // MARK: Renamed and deleted VMs
+
+  @Test func renamingAVMCarriesItsAccessLevel() {
+    let store = makeStore()
+    store.setAccess(.template, for: "base")
+    store.setAccess(.read, for: "other")
+
+    store.renameVM(from: "base", to: "base-2026")
+
+    let reloaded = makeStore()
+    #expect(reloaded.access(for: "base-2026") == .template)
+    #expect(reloaded.access(for: "base") == .none)
+    #expect(reloaded.access(for: "other") == .read)
+  }
+
+  @Test func deletingVMsRemovesTheirEntries() throws {
+    let store = makeStore()
+    store.setAccess(.operate, for: "a")
+    store.setAccess(.read, for: "b")
+    store.setAccess(.template, for: "c")
+
+    store.removeVMs(["a", "c", "never-shared"])
+
+    #expect(try AgentPolicyStore(file: paths.policyFile).load().vms == ["b": .read])
+  }
 }

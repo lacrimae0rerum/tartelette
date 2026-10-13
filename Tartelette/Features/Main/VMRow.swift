@@ -27,6 +27,13 @@ struct VMRow: View {
           .foregroundStyle(.secondary)
           .help("Live clipboard sync is on")
       }
+      if let agentNote {
+        Image(systemName: "sparkles")
+          .font(.caption2)
+          .foregroundStyle(.secondary)
+          .help(agentNote)
+          .accessibilityLabel(agentNote)
+      }
       StatusDot(state: vm.state)
     }
     .padding(.vertical, 2)
@@ -44,6 +51,17 @@ struct VMRow: View {
       isDropTarget = targeted && vm.state.isRunning
     }
     .help(vm.state.isRunning ? "Drop files here to copy them to the VM's Desktop" : vm.state.title)
+  }
+
+  /// Set while agents can reach this VM: shared with them, or created by one.
+  private var agentNote: String? {
+    let agents = model.agents
+    guard agents.enabled else { return nil }
+    if let creator = agents.creator(of: vm.name) {
+      return "Created by \(creator.client ?? "an agent"), which fully controls it"
+    }
+    let access = agents.access(for: vm.name)
+    return access == .none ? nil : "Shared with AI agents: \(access.title)"
   }
 
   private var subtitle: String {

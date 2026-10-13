@@ -33,7 +33,9 @@ final class AppModel {
     let context = TartContext()
     let profiles = RunProfileStore(defaultEngine: { settings.defaultClipboardEngine })
     let jobs = JobCenter(context: context, settings: settings)
-    let library = VMLibrary(context: context, settings: settings, profiles: profiles, jobs: jobs, navigation: navigation)
+    let agents = AgentAccessStore(tartPaths: { context.paths })
+    let library = VMLibrary(
+      context: context, settings: settings, profiles: profiles, agents: agents, jobs: jobs, navigation: navigation)
     let clipboard = ClipboardCenter(
       context: context, settings: settings, profiles: profiles, library: library, navigation: navigation)
     let metrics = MetricsCenter(context: context, settings: settings, library: library, clipboard: clipboard)
@@ -47,7 +49,7 @@ final class AppModel {
     self.clipboard = clipboard
     self.metrics = metrics
     self.registries = RegistryStore(jobs: jobs, settings: settings)
-    self.agents = AgentAccessStore(tartPaths: { context.paths })
+    self.agents = agents
 
     context.reload(settings: settings)
     library.onChange.append { [weak clipboard, weak metrics] changes in
