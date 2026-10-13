@@ -247,6 +247,9 @@ and it works while Tartelette is closed.
 
 It's **off by default**, and no VM is shared until you decide, one VM at a time.
 
+If you want your agent to set itself up, point it to [`docs/AGENT_SETUP.md`](docs/AGENT_SETUP.md):
+it checks the requirements, adds Tartelette and asks you for the steps only you can take.
+
 ### Set it up
 
 1. In **Settings › Agents**, turn on **Let AI agents use Tartelette's VMs**.
