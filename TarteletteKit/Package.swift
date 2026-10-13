@@ -9,6 +9,8 @@ let package = Package(
   ],
   products: [
     .library(name: "TarteletteKit", targets: ["TarteletteKit"]),
+    // Linked by the app project's `tartelette-mcp` tool target, which embeds the helper in the app.
+    .library(name: "TarteletteMCP", targets: ["TarteletteMCP"]),
     .executable(name: "tartelette-mcp", targets: ["TarteletteMCPServer"]),
   ],
   dependencies: [

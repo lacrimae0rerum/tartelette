@@ -8,13 +8,10 @@
 
 /* Begin PBXBuildFile section */
 		7A1E00000000000000000001 /* TarteletteKit in Frameworks */ = {isa = PBXBuildFile; productRef = 7A1E00000000000000000020 /* TarteletteKit */; };
+		7A1E00000000000000000043 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A1E00000000000000000040 /* main.swift */; };
+		7A1E00000000000000000044 /* TarteletteMCP in Frameworks */ = {isa = PBXBuildFile; productRef = 7A1E00000000000000000046 /* TarteletteMCP */; };
+		7A1E00000000000000000045 /* tartelette-mcp in Embed Helper Tool */ = {isa = PBXBuildFile; fileRef = 7A1E00000000000000000041 /* tartelette-mcp */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
 /* End PBXBuildFile section */
-
-/* Begin PBXFileReference section */
-		7A1E00000000000000000002 /* Tartelette.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Tartelette.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		7A1E00000000000000000010 /* Tartelette.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Tartelette.entitlements; sourceTree = "<group>"; };
-		7A1E00000000000000000030 /* TarteletteTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TarteletteTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-/* End PBXFileReference section */
 
 /* Begin PBXContainerItemProxy section */
 		7A1E00000000000000000035 /* PBXContainerItemProxy */ = {
@@ -24,7 +21,37 @@
 			remoteGlobalIDString = 7A1E00000000000000000007;
 			remoteInfo = Tartelette;
 		};
+		7A1E0000000000000000004B /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 7A1E0000000000000000000B /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 7A1E00000000000000000047;
+			remoteInfo = "tartelette-mcp";
+		};
 /* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		7A1E0000000000000000004A /* Embed Helper Tool */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 6;
+			files = (
+				7A1E00000000000000000045 /* tartelette-mcp in Embed Helper Tool */,
+			);
+			name = "Embed Helper Tool";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		7A1E00000000000000000002 /* Tartelette.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Tartelette.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		7A1E00000000000000000010 /* Tartelette.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Tartelette.entitlements; sourceTree = "<group>"; };
+		7A1E00000000000000000030 /* TarteletteTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TarteletteTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		7A1E00000000000000000040 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
+		7A1E00000000000000000041 /* tartelette-mcp */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = "tartelette-mcp"; sourceTree = BUILT_PRODUCTS_DIR; };
+		7A1E00000000000000000050 /* tartelette-mcp.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "tartelette-mcp.entitlements"; sourceTree = "<group>"; };
+/* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		7A1E00000000000000000003 /* Tartelette */ = {
@@ -55,6 +82,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		7A1E00000000000000000049 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				7A1E00000000000000000044 /* TarteletteMCP in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -63,6 +98,7 @@
 			children = (
 				7A1E00000000000000000003 /* Tartelette */,
 				7A1E00000000000000000031 /* TarteletteTests */,
+				7A1E00000000000000000042 /* TarteletteMCPServer */,
 				7A1E00000000000000000011 /* Config */,
 				7A1E00000000000000000006 /* Products */,
 			);
@@ -73,6 +109,7 @@
 			children = (
 				7A1E00000000000000000002 /* Tartelette.app */,
 				7A1E00000000000000000030 /* TarteletteTests.xctest */,
+				7A1E00000000000000000041 /* tartelette-mcp */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -81,8 +118,18 @@
 			isa = PBXGroup;
 			children = (
 				7A1E00000000000000000010 /* Tartelette.entitlements */,
+				7A1E00000000000000000050 /* tartelette-mcp.entitlements */,
 			);
 			path = Config;
+			sourceTree = "<group>";
+		};
+		7A1E00000000000000000042 /* TarteletteMCPServer */ = {
+			isa = PBXGroup;
+			children = (
+				7A1E00000000000000000040 /* main.swift */,
+			);
+			name = TarteletteMCPServer;
+			path = TarteletteKit/Sources/TarteletteMCPServer;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -95,10 +142,12 @@
 				7A1E00000000000000000009 /* Sources */,
 				7A1E00000000000000000004 /* Frameworks */,
 				7A1E0000000000000000000A /* Resources */,
+				7A1E0000000000000000004A /* Embed Helper Tool */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				7A1E0000000000000000004C /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				7A1E00000000000000000003 /* Tartelette */,
@@ -132,6 +181,25 @@
 			productReference = 7A1E00000000000000000030 /* TarteletteTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
+		7A1E00000000000000000047 /* tartelette-mcp */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 7A1E0000000000000000004D /* Build configuration list for PBXNativeTarget "tartelette-mcp" */;
+			buildPhases = (
+				7A1E00000000000000000048 /* Sources */,
+				7A1E00000000000000000049 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = "tartelette-mcp";
+			packageProductDependencies = (
+				7A1E00000000000000000046 /* TarteletteMCP */,
+			);
+			productName = "tartelette-mcp";
+			productReference = 7A1E00000000000000000041 /* tartelette-mcp */;
+			productType = "com.apple.product-type.tool";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -148,6 +216,9 @@
 					7A1E00000000000000000037 = {
 						CreatedOnToolsVersion = 27.0;
 						TestTargetID = 7A1E00000000000000000007;
+					};
+					7A1E00000000000000000047 = {
+						CreatedOnToolsVersion = 27.0;
 					};
 				};
 			};
@@ -170,6 +241,7 @@
 			targets = (
 				7A1E00000000000000000007 /* Tartelette */,
 				7A1E00000000000000000037 /* TarteletteTests */,
+				7A1E00000000000000000047 /* tartelette-mcp */,
 			);
 		};
 /* End PBXProject section */
@@ -206,6 +278,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		7A1E00000000000000000048 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				7A1E00000000000000000043 /* main.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -213,6 +293,11 @@
 			isa = PBXTargetDependency;
 			target = 7A1E00000000000000000007 /* Tartelette */;
 			targetProxy = 7A1E00000000000000000035 /* PBXContainerItemProxy */;
+		};
+		7A1E0000000000000000004C /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 7A1E00000000000000000047 /* tartelette-mcp */;
+			targetProxy = 7A1E0000000000000000004B /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -388,6 +473,43 @@
 			};
 			name = Release;
 		};
+		7A1E0000000000000000004E /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = "Config/tartelette-mcp.entitlements";
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Manual;
+				CREATE_INFOPLIST_SECTION_IN_BINARY = YES;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_APP_SANDBOX = NO;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = io.github.lacrimae0rerum.Tartelette.mcp;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		7A1E0000000000000000004F /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = "Config/tartelette-mcp.entitlements";
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO;
+				CODE_SIGN_STYLE = Manual;
+				CREATE_INFOPLIST_SECTION_IN_BINARY = YES;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_APP_SANDBOX = NO;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = io.github.lacrimae0rerum.Tartelette.mcp;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -418,6 +540,15 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
+		7A1E0000000000000000004D /* Build configuration list for PBXNativeTarget "tartelette-mcp" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				7A1E0000000000000000004E /* Debug */,
+				7A1E0000000000000000004F /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
@@ -431,6 +562,10 @@
 		7A1E00000000000000000020 /* TarteletteKit */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = TarteletteKit;
+		};
+		7A1E00000000000000000046 /* TarteletteMCP */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = TarteletteMCP;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
