@@ -23,6 +23,14 @@ public enum AgentToolError: Error, Sendable, Equatable, LocalizedError {
   case startFailed(vm: String, logTail: String)
   /// A new VM's directory couldn't be identified, so it couldn't be recorded as an agent VM.
   case unidentifiedVM(String)
+  /// Guest tools need a running VM.
+  case vmNotRunning(String)
+  /// `tart exec` couldn't reach the Tart Guest Agent in the VM.
+  case guestAgentUnreachable(String)
+  /// The guest command didn't finish within `seconds`.
+  case commandTimedOut(vm: String, seconds: Int)
+  /// An `exec` command that is empty or contains a NUL character.
+  case invalidCommand
 
   public var errorDescription: String? {
     switch self {
@@ -54,6 +62,16 @@ public enum AgentToolError: Error, Sendable, Equatable, LocalizedError {
     case .unidentifiedVM(let name):
       "“\(name)” was created, but Tartelette couldn't identify its directory, so agents can't manage it. "
         + "Delete it in Tartelette."
+    case .vmNotRunning(let name):
+      "VM “\(name)” isn't running. Start it with start_vm."
+    case .guestAgentUnreachable(let name):
+      "The Tart Guest Agent in “\(name)” isn't answering. The VM may still be booting (start_vm with wait "
+        + "waits for it), or the agent may not be installed in the guest."
+    case .commandTimedOut(let name, let seconds):
+      "The command in “\(name)” didn't finish within \(seconds) seconds. Pass a longer timeout, "
+        + "or run long tasks in the background."
+    case .invalidCommand:
+      "The command is empty or contains a NUL character."
     }
   }
 }

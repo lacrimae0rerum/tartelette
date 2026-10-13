@@ -182,7 +182,7 @@ extension AgentToolbox {
     }
   }
 
-  private func operatingSystem(of name: String) -> VMOperatingSystem {
+  func operatingSystem(of name: String) -> VMOperatingSystem {
     (try? client.configuration(of: name))?.operatingSystem ?? .unknown
   }
 
