@@ -52,13 +52,19 @@ struct ProcessRunnerTests {
   }
 
   @Test func timesOut() async throws {
-    let start = Date()
+    // The call must end long before the child would exit on its own. The bound is half the child's
+    // lifetime rather than a few seconds: the timeout fires on time even on a loaded machine, but
+    // resuming this test once the child is gone can take seconds when other tests keep every
+    // thread of the concurrency pool busy.
+    let childLifetime = 60
+    let start = ContinuousClock.now
     await #expect(throws: ProcessRunError.timedOut(after: .milliseconds(300))) {
       try await runner.run(
         ProcessRequest(
-          executable: URL(fileURLWithPath: "/bin/sleep"), arguments: ["10"], timeout: .milliseconds(300)))
+          executable: URL(fileURLWithPath: "/bin/sleep"), arguments: [String(childLifetime)],
+          timeout: .milliseconds(300)))
     }
-    #expect(Date().timeIntervalSince(start) < 5)
+    #expect(ContinuousClock.now - start < .seconds(childLifetime) / 2)
   }
 
   @Test func honoursTaskCancellation() async throws {

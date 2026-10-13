@@ -49,7 +49,9 @@ struct RoundThreeSessionTests {
     session.start()
     defer { session.stop() }
 
-    #expect(await waitUntil(timeout: .seconds(5)) { !log.skipped.isEmpty })
+    // The report is due 400 ms after the stuck copy is first seen; the wait only bounds a loaded
+    // main actor, so it uses the helper's default budget.
+    #expect(await waitUntil { !log.skipped.isEmpty })
     let readsAtReport = reads.count
     try await Task.sleep(for: .milliseconds(800))
     #expect(log.skipped.count == 1, "reported once: \(log.skipped)")

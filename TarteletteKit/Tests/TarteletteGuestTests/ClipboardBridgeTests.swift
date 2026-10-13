@@ -21,6 +21,22 @@ struct ClipboardBridgeTests {
       try? FileManager.default.removeItem(at: hostStaging)
       try? FileManager.default.removeItem(at: guestStaging)
     }
+
+    /// Waits until this process sees the guest pasteboard at the change count the bridge reported.
+    ///
+    /// The guest script writes from another process; on a loaded machine this process can take a
+    /// moment to see the named pasteboard change, and reading its contents before then can return
+    /// the previous (empty) state. Only the change count is awaited, so content that is still
+    /// missing once the change is visible keeps failing the test's content expectations.
+    func guestBoardCatchesUp(to state: GuestClipboardState, within timeout: Duration = .seconds(20)) async throws
+      -> Bool
+    {
+      let deadline = ContinuousClock.now + timeout
+      while guestBoard.changeCount != state.changeCount, ContinuousClock.now < deadline {
+        try await Task.sleep(for: .milliseconds(50))
+      }
+      return guestBoard.changeCount == state.changeCount
+    }
   }
 
   static func makeFixture(simulatesStreamLoss: Bool = false) throws -> Fixture {
@@ -67,13 +83,7 @@ struct ClipboardBridgeTests {
 
     let state = try await fixture.bridge.pushToGuest(payload, endpoint: fixture.endpoint)
     #expect(state.fingerprint == payload.fingerprint)
-    // The guest script writes from another process; on a slow machine this process can take a
-    // moment to see the named pasteboard change (the other clipboard tests wait for it too).
-    let deadline = ContinuousClock.now + .seconds(20)
-    while fixture.guestBoard.changeCount != state.changeCount, ContinuousClock.now < deadline {
-      try await Task.sleep(for: .milliseconds(50))
-    }
-    #expect(state.changeCount == fixture.guestBoard.changeCount)
+    #expect(try await fixture.guestBoardCatchesUp(to: state))
     #expect(fixture.guestBoard.string(forType: .string) == payload.plainText)
 
     let pulled = try #require(try await fixture.bridge.pullFromGuest(fixture.endpoint))
@@ -89,7 +99,8 @@ struct ClipboardBridgeTests {
     #expect(png.count > 512 * 1024)
     let payload = ClipboardPayload(items: [ClipboardRepresentation(type: ClipboardRepresentation.png, data: png)])
 
-    _ = try await fixture.bridge.pushToGuest(payload, endpoint: fixture.endpoint)
+    let state = try await fixture.bridge.pushToGuest(payload, endpoint: fixture.endpoint)
+    #expect(try await fixture.guestBoardCatchesUp(to: state))
     #expect(fixture.guestBoard.data(forType: .png) == png)
 
     let pulled = try #require(try await fixture.bridge.pullFromGuest(fixture.endpoint))
@@ -112,7 +123,8 @@ struct ClipboardBridgeTests {
     try blob.write(to: folder.appendingPathComponent("inner.bin"))
 
     let payload = ClipboardPayload(files: [note, folder])
-    _ = try await fixture.bridge.pushToGuest(payload, endpoint: fixture.endpoint)
+    let state = try await fixture.bridge.pushToGuest(payload, endpoint: fixture.endpoint)
+    #expect(try await fixture.guestBoardCatchesUp(to: state))
 
     let guestURLs = try #require(
       fixture.guestBoard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL])
