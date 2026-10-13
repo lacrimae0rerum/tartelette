@@ -8,12 +8,14 @@ struct CommandPreview: View {
   let commandLine: String
   /// When set, shows a “Run in Terminal” button.
   var runInTerminal: (() -> Void)?
+  /// The leading glyph; snippets that aren't shell commands (e.g. JSON) pick their own.
+  var systemImage = "terminal"
 
   @State private var copied = false
 
   var body: some View {
     HStack(alignment: .top, spacing: 8) {
-      Image(systemName: "terminal")
+      Image(systemName: systemImage)
         .foregroundStyle(.secondary)
         .padding(.top, 1)
       Text(commandLine)

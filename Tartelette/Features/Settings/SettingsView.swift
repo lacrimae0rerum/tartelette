@@ -14,6 +14,8 @@ struct SettingsView: View {
         .tabItem { Label("Monitoring", systemImage: "chart.xyaxis.line") }
       NetworkSettings()
         .tabItem { Label("Registries & Network", systemImage: "network") }
+      AgentSettings()
+        .tabItem { Label("Agents", systemImage: "sparkles") }
     }
     .frame(width: 560)
     .scenePadding()
