@@ -40,7 +40,28 @@ jobs:
           swift --version
 
       - name: Test
-        run: make test
+        # A pseudo-terminal makes `swift test` print test output line by line; through a pipe it
+        # arrives in blocks of about 16 KiB, so after a hang the log would stop well before the stuck
+        # test. A normal run takes 3 to 7 minutes: if the tests are still running after 15, sample the
+        # test processes so the log shows where they are stuck, then stop them so the job fails
+        # instead of reaching the job's time limit. `script` needs stdin from /dev/null on runners.
+        timeout-minutes: 25
+        run: |
+          (
+            sleep 900
+            for pid in $(pgrep -f 'swiftpm-testing-helper|xctest' || true); do
+              echo "::warning::Tests still running after 15 minutes; sampling process $pid"
+              sample "$pid" 5 -file "$RUNNER_TEMP/hang-$pid.txt" >/dev/null 2>&1 || true
+              head -n 400 "$RUNNER_TEMP/hang-$pid.txt" 2>/dev/null || true
+              kill -TERM "$pid" 2>/dev/null || true
+            done
+          ) &
+          watchdog=$!
+          set +e
+          script -q /dev/null make test </dev/null
+          status=$?
+          kill "$watchdog" 2>/dev/null
+          exit "$status"
 
       - name: Check brand assets
         if: matrix.package
