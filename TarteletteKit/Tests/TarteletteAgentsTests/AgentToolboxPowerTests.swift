@@ -1,10 +1,16 @@
 import Foundation
+import TarteletteCore
+import TarteletteGuest
 import Testing
 
 @testable import TarteletteAgents
 
 @Suite("Agent toolbox: starting and stopping VMs")
 struct AgentToolboxPowerTests {
+  private static let loginwindowShutdown = [
+    "/usr/bin/osascript", "-e", "tell application \"loginwindow\" to «event aevtshut»",
+  ]
+
   /// - Parameter realPause: Real time per virtual sleep; longer where a child process must exit
   ///   between polls, so the test holds on a loaded machine.
   private static func harness(
@@ -159,9 +165,12 @@ struct AgentToolboxPowerTests {
     let result = try await harness.toolbox.stopVM(name: "dev", timeout: 5)
 
     #expect(result == AgentStopResult(name: "dev", state: "stopped", method: .powerOff))
-    #expect(harness.tart.calls == ["stop dev"])
+    // The fake guest agent doesn't answer, so the in-guest request goes nowhere and SIGUSR2 follows.
+    #expect(harness.tart.calls == ["exec dev \(Self.loginwindowShutdown.joined(separator: " "))", "stop dev"])
     #expect(harness.clock.elapsed >= .seconds(5))
-    #expect(try harness.onlyAuditEntry().outcome == .ok)
+    let entry = try harness.onlyAuditEntry()
+    #expect(entry.outcome == .ok)
+    #expect(entry.detail == "powerOff after SIGUSR2")
   }
 
   @Test func forcedStopPowersOffAtOnce() async throws {
@@ -170,14 +179,98 @@ struct AgentToolboxPowerTests {
     try harness.tart.addVM("dev")
     let holder = try FcntlLockHolder(file: harness.tart.paths.configFile("dev"))
     defer { holder.stop() }
+    let guest = ScriptedTransport(status: 0)
 
-    let result = try await harness.toolbox.stopVM(name: "dev", force: true)
+    let result = try await harness.toolbox(guest: guest).stopVM(name: "dev", force: true)
 
     #expect(result == AgentStopResult(name: "dev", state: "stopped", method: .powerOff))
     #expect(harness.tart.calls == ["stop dev"])
-    // No SIGUSR2 reached the holder, which would have made it exit.
+    // No SIGUSR2 reached the holder, which would have made it exit, and the guest wasn't asked.
     #expect(holder.isRunning)
+    #expect(guest.calls.isEmpty)
     #expect(harness.clock.sleeps.isEmpty)
+    #expect(try harness.onlyAuditEntry().detail == "powerOff")
+  }
+
+  // MARK: Stop: macOS guests are asked from the inside
+
+  @Test func stopAsksAMacOSGuestToShutDownFromInside() async throws {
+    let harness = try Self.harness(realPause: .milliseconds(100))
+    defer { harness.remove() }
+    try harness.tart.addVM("dev")
+    // Ignores SIGUSR2, like a headless macOS guest; only the in-guest request stops it.
+    let holder = try FcntlLockHolder(file: harness.tart.paths.configFile("dev"), ignoringGuestShutdown: true)
+    defer { holder.stop() }
+    let guest = ScriptedTransport { _ in
+      holder.stop()
+      return CommandOutput(status: 0)
+    }
+
+    let result = try await harness.toolbox(guest: guest).stopVM(name: "dev")
+
+    #expect(result == AgentStopResult(name: "dev", state: "stopped", method: .guestShutdown))
+    #expect(guest.calls.map(\.command) == [Self.loginwindowShutdown])
+    #expect(guest.calls.map(\.timeout) == [.seconds(15)])
+    #expect(harness.tart.calls.isEmpty)
+    let entry = try harness.onlyAuditEntry()
+    #expect(entry.outcome == .ok)
+    #expect(entry.detail == "guestShutdown after an in-guest shutdown request")
+  }
+
+  @Test func aDeliveredInGuestRequestIsNotFollowedBySIGUSR2() async throws {
+    let harness = try Self.harness(realPause: .milliseconds(100))
+    defer { harness.remove() }
+    try harness.tart.addVM("dev")
+    // Would exit on SIGUSR2.
+    let holder = try FcntlLockHolder(file: harness.tart.paths.configFile("dev"))
+    defer { holder.stop() }
+    let guest = ScriptedTransport(status: 0)
+
+    let result = try await harness.toolbox(guest: guest).stopVM(name: "dev", timeout: 3)
+
+    // The guest accepted the request but never stopped, so it was powered off at the timeout.
+    #expect(result == AgentStopResult(name: "dev", state: "stopped", method: .powerOff))
+    #expect(holder.isRunning)
+    #expect(harness.tart.calls == ["stop dev"])
+    #expect(harness.clock.elapsed >= .seconds(3))
+    #expect(try harness.onlyAuditEntry().detail == "powerOff after an in-guest shutdown request")
+  }
+
+  @Test func stopFallsBackToSIGUSR2WhenTheGuestAgentIsUnreachable() async throws {
+    let harness = try Self.harness(realPause: .milliseconds(100))
+    defer { harness.remove() }
+    try harness.tart.addVM("dev")
+    let holder = try FcntlLockHolder(file: harness.tart.paths.configFile("dev"))
+    defer { holder.stop() }
+    let guest = ScriptedTransport { _ in throw GuestTransportError.unreachable("The guest agent is not running.") }
+
+    let result = try await harness.toolbox(guest: guest).stopVM(name: "dev")
+
+    #expect(result == AgentStopResult(name: "dev", state: "stopped", method: .guestShutdown))
+    #expect(guest.calls.count == 1)
+    // The stop returned once the lock was gone; the holder's exit is noticed a little later.
+    #expect(await holder.waitForExit())
+    #expect(holder.exitSignal == SIGUSR2)
+    #expect(harness.tart.calls.isEmpty)
+    #expect(try harness.onlyAuditEntry().detail == "guestShutdown after SIGUSR2")
+  }
+
+  @Test func linuxGuestsGetSIGUSR2AndNoInGuestRequest() async throws {
+    let harness = try Self.harness(realPause: .milliseconds(100))
+    defer { harness.remove() }
+    try harness.tart.addVM("dev", os: "linux")
+    let holder = try FcntlLockHolder(file: harness.tart.paths.configFile("dev"))
+    defer { holder.stop() }
+    let guest = ScriptedTransport(status: 0)
+
+    let result = try await harness.toolbox(guest: guest).stopVM(name: "dev")
+
+    #expect(result == AgentStopResult(name: "dev", state: "stopped", method: .guestShutdown))
+    #expect(guest.calls.isEmpty)
+    // The stop returned once the lock was gone; the holder's exit is noticed a little later.
+    #expect(await holder.waitForExit())
+    #expect(holder.exitSignal == SIGUSR2)
+    #expect(harness.tart.calls.isEmpty)
   }
 
   @Test func stopNeedsOperateAccess() async throws {

@@ -67,6 +67,24 @@ final class FcntlLockHolder: @unchecked Sendable {
 
   var isRunning: Bool { process.isRunning }
 
+  /// The signal that ended the helper, nil while it runs or when it exited on its own.
+  var exitSignal: Int32? {
+    guard !process.isRunning, process.terminationReason == .uncaughtSignal else { return nil }
+    return process.terminationStatus
+  }
+
+  /// Waits up to `timeout` for the helper to exit by itself (on SIGUSR2, say); returns whether it did.
+  ///
+  /// The lock is gone as soon as the helper dies, but `Process` learns of the exit a little later,
+  /// which can take seconds on a loaded machine. Keep `timeout` well below the hold time.
+  func waitForExit(within timeout: Duration = .seconds(10)) async -> Bool {
+    let deadline = ContinuousClock.now + timeout
+    while process.isRunning, ContinuousClock.now < deadline {
+      try? await Task.sleep(for: .milliseconds(20))
+    }
+    return !process.isRunning
+  }
+
   /// Terminates the helper and waits for it to exit, releasing the lock.
   func stop() {
     if process.isRunning { process.terminate() }
