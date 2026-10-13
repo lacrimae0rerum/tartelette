@@ -25,13 +25,18 @@ public struct AgentToolHandler: Sendable {
 
   /// Runs one tool call.
   ///
+  /// - Parameter progress: Receives `create_sandbox`'s clone progress in 0...1.
   /// - Throws: `MCPError.invalidParams` for a tool that doesn't exist, `CancellationError` when
   ///   the call was cancelled.
-  public func call(_ name: String, arguments: [String: Value]?) async throws -> CallTool.Result {
+  public func call(
+    _ name: String,
+    arguments: [String: Value]?,
+    progress: (@Sendable (Double) -> Void)? = nil
+  ) async throws -> CallTool.Result {
     guard let tool = AgentTool(rawValue: name) else { throw MCPError.invalidParams("Unknown tool: \(name)") }
     do {
       let arguments = try AgentToolArguments(arguments, for: AgentToolCatalog.definition(for: tool))
-      return try Self.result(try await run(tool, arguments, on: try makeToolbox()))
+      return try Self.result(try await run(tool, arguments, on: try makeToolbox(), progress: progress))
     } catch {
       if error is CancellationError || Task.isCancelled { throw CancellationError() }
       return CallTool.Result(
@@ -39,9 +44,12 @@ public struct AgentToolHandler: Sendable {
     }
   }
 
-  private func run(_ tool: AgentTool, _ arguments: AgentToolArguments, on toolbox: any AgentToolProviding)
-    async throws -> any Encodable
-  {
+  private func run(
+    _ tool: AgentTool,
+    _ arguments: AgentToolArguments,
+    on toolbox: any AgentToolProviding,
+    progress: (@Sendable (Double) -> Void)?
+  ) async throws -> any Encodable {
     switch tool {
     case .listVMs:
       return AgentVMList(vms: try await toolbox.listVMs())
@@ -58,7 +66,7 @@ public struct AgentToolHandler: Sendable {
     case .createSandbox:
       return try await toolbox.createSandbox(
         from: try arguments.requiredString("template"), name: arguments.string("name"),
-        start: arguments.boolean("start") ?? false, progress: nil)
+        start: arguments.boolean("start") ?? false, progress: progress)
     case .deleteVM:
       return try await toolbox.deleteVM(name: try arguments.requiredString("name"))
     case .exec:
