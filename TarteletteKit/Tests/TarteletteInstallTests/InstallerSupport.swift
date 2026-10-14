@@ -77,19 +77,25 @@ final class StubDownloader: TartDownloading, @unchecked Sendable {
   }
 }
 
-/// A signature check that accepts or rejects every bundle, and records what it checked.
+/// A signature check that accepts or rejects every bundle, or the bundles in one folder, and records
+/// what it checked.
 final class FakeVerifier: TartSignatureVerifying, @unchecked Sendable {
   private let lock = NSLock()
   private var rejection: TartInstallError?
+  private var rejectedFolders: [String: TartInstallError] = [:]
   private var checked: [URL] = []
 
   func reject(with error: TartInstallError?) { lock.withLock { rejection = error } }
+  /// Rejects every bundle inside `folder`, such as an installed `versions/<version>`.
+  func reject(appsIn folder: URL, with error: TartInstallError) {
+    lock.withLock { rejectedFolders[folder.path + "/"] = error }
+  }
   var checkedApps: [URL] { lock.withLock { checked } }
 
   func verify(appAt url: URL) throws {
     let rejection = lock.withLock {
       checked.append(url)
-      return self.rejection
+      return rejectedFolders.first { url.path.hasPrefix($0.key) }?.value ?? self.rejection
     }
     if let rejection { throw rejection }
   }

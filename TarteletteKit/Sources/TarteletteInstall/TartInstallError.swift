@@ -31,7 +31,7 @@ public enum TartInstallError: LocalizedError, Sendable, Equatable {
   case busy
   /// There is no earlier version to go back to.
   case noPreviousVersion
-  /// Running processes execute these installed versions, so they can't be removed.
+  /// Running processes execute these installed versions, so they can't be removed or replaced.
   case inUse(versions: [String])
 
   public var errorDescription: String? {
@@ -78,7 +78,7 @@ public enum TartInstallError: LocalizedError, Sendable, Equatable {
     case .inUse(let versions):
       let names = versions.joined(separator: ", ")
       return "Tart \(names) is still running (a virtual machine or a tart command uses it), so Tartelette "
-        + "didn't remove it. Stop those virtual machines and commands, then try again."
+        + "left it in place. Stop those virtual machines and commands, then try again."
     }
   }
 

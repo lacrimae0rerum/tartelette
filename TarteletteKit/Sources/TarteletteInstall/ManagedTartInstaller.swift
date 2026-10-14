@@ -86,7 +86,9 @@ public struct ManagedTartInstaller: Sendable {
   /// The archive's SHA-256 must match the release's checksums file, it must hold a `tart.app` folder,
   /// and `tart.app` must pass the signature check and report the release's version. Only `tart.app`
   /// and the archive's LICENSE (when it is a regular file) are installed; anything else is ignored.
-  /// A version that is already installed is selected without downloading anything.
+  /// A version that is already installed and still passes those checks is selected without
+  /// downloading anything. One that doesn't (its folder lacks `tart.app`, or the signature or version
+  /// check fails) is downloaded again and replaced, unless a running process uses it.
   ///
   /// - Throws: `TartInstallError`, `TartReleaseError` for a damaged checksums file, or
   ///   `CancellationError`. Nothing changes on failure.
@@ -99,14 +101,17 @@ public struct ManagedTartInstaller: Sendable {
       let version = release.version.description
       let expected = release.archive.size
 
-      if isInstalled(version) {
-        if layout.currentVersion != version {
-          progress(TartInstallProgress(phase: .installing, bytesReceived: 0, bytesExpected: expected))
-          try verifyBundle(at: layout.versionDirectory(version).appendingPathComponent("tart.app"), is: release.version)
-          try select(version)
-          _ = try? pruneUnusedVersions()
+      if Self.itemExists(layout.versionDirectory(version)) {
+        if isIntact(version, as: release.version) {
+          if layout.currentVersion != version {
+            progress(TartInstallProgress(phase: .installing, bytesReceived: 0, bytesExpected: expected))
+            try select(version)
+            _ = try? pruneUnusedVersions()
+          }
+          return state()
         }
-        return state()
+        // A broken copy is downloaded again and replaced, but never under a running process.
+        try refuseIfRunning(version)
       }
 
       let work = try makeWorkDirectory()
@@ -135,7 +140,7 @@ public struct ManagedTartInstaller: Sendable {
 
       progress(TartInstallProgress(phase: .installing, bytesReceived: expected, bytesExpected: expected))
       try Task.checkCancellation()
-      try place(payload, as: version)
+      try place(payload, as: version, setAsideIn: work)
       _ = try? pruneUnusedVersions()
       return state()
     }
@@ -214,26 +219,60 @@ public struct ManagedTartInstaller: Sendable {
     }
   }
 
-  /// Moves the verified version into `versions/` and selects it, undoing the move if selecting fails.
-  private func place(_ payload: URL, as version: String) throws {
+  /// Moves the verified version into `versions/` and selects it, undoing everything if a step fails.
+  ///
+  /// A broken folder already at `versions/<version>` is first moved into `work`, which is deleted
+  /// afterwards, and put back on failure.
+  private func place(_ payload: URL, as version: String, setAsideIn work: URL) throws {
     let fileManager = FileManager.default
     let versions = layout.versionsDirectory
     let createdVersions = !fileManager.fileExists(atPath: versions.path)
     if createdVersions { try fileManager.createDirectory(at: versions, withIntermediateDirectories: false) }
     let destination = layout.versionDirectory(version)
+    var replaced: URL?
+    func undo() {
+      if let replaced { try? Self.rename(replaced, to: destination, replacing: false) }
+      if createdVersions { try? fileManager.removeItem(at: versions) }
+    }
+
     do {
+      if Self.itemExists(destination) {
+        try refuseIfRunning(version)
+        let aside = work.appendingPathComponent("replaced", isDirectory: true)
+        try Self.rename(destination, to: aside, replacing: false)
+        replaced = aside
+      }
       try Self.rename(payload, to: destination, replacing: false)
     } catch {
-      if createdVersions { try? fileManager.removeItem(at: versions) }
+      undo()
       throw error
     }
     do {
       try select(version)
     } catch {
       try? Self.rename(destination, to: payload, replacing: false)
-      if createdVersions { try? fileManager.removeItem(at: versions) }
+      undo()
       throw error
     }
+  }
+
+  /// Whether `versions/<version>` holds a `tart.app` that passes the signature and version checks.
+  private func isIntact(_ version: String, as expected: TartVersion) -> Bool {
+    guard isInstalled(version) else { return false }
+    let app = layout.versionDirectory(version).appendingPathComponent("tart.app")
+    return (try? verifyBundle(at: app, is: expected)) != nil
+  }
+
+  /// Throws `TartInstallError.inUse` when a running process executes `version`.
+  private func refuseIfRunning(_ version: String) throws {
+    if isRunning(version, among: runningExecutables.runningExecutablePaths()) {
+      throw TartInstallError.inUse(versions: [version])
+    }
+  }
+
+  /// Whether anything, even a broken link, is at `url`.
+  private static func itemExists(_ url: URL) -> Bool {
+    (try? FileManager.default.attributesOfItem(atPath: url.path)) != nil
   }
 
   // MARK: - Switch
