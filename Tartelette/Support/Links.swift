@@ -3,6 +3,8 @@ import Foundation
 /// External documentation linked from Help and onboarding.
 nonisolated enum Links {
   static let tartDocumentation = URL(string: "https://tart.run")!
+  /// Tart's license, FSL-1.1-ALv2, which covers the copy Tartelette downloads.
+  static let tartLicense = URL(string: "https://github.com/openai/tart/blob/main/LICENSE")!
   /// Tart and its guest agent are maintained under the OpenAI GitHub organisation; Cirrus Labs
   /// still publishes the VM images (ghcr.io/cirruslabs).
   static let guestAgent = URL(string: "https://github.com/openai/tart-guest-agent")!

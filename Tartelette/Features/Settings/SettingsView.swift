@@ -29,9 +29,12 @@ private struct GeneralSettings: View {
 
   var body: some View {
     @Bindable var settings = model.settings
+    let installation = model.installation
+    let tart = TartSettingsPresentation(
+      active: installation.activeTart, status: installation.updateStatus, managed: installation.managed)
 
     Form {
-      Section("Tart") {
+      Section {
         LabeledContent("Executable") {
           HStack {
             Text(model.context.environment?.executable.path ?? "Not found")
@@ -48,6 +51,9 @@ private struct GeneralSettings: View {
               }
             }
           }
+        }
+        if let source = tart.source {
+          LabeledContent("Source", value: source)
         }
         LabeledContent("Version", value: model.context.version ?? "—")
         LabeledContent("Home (TART_HOME)") {
@@ -66,6 +72,15 @@ private struct GeneralSettings: View {
             }
           }
         }
+        TartUpdateRows(presentation: tart)
+      } header: {
+        Text("Tart")
+      } footer: {
+        TartSettingsFooter()
+      }
+
+      if tart.canRemove {
+        ManagedTartSection(presentation: tart)
       }
 
       Section("App") {
@@ -87,6 +102,8 @@ private struct GeneralSettings: View {
       }
     }
     .formStyle(.grouped)
+    // Installed versions can change outside the app (another copy of Tartelette, the MCP helper).
+    .onAppear { installation.refresh() }
   }
 
   private func chooseExecutable() {

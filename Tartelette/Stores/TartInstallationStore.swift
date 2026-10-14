@@ -100,6 +100,13 @@ nonisolated enum TartInstallPhase: Equatable {
   case installing
 }
 
+/// How much of a release archive has arrived.
+nonisolated struct TartDownloadAmount: Equatable {
+  var received: Int64
+  /// The archive's size as the release announces it.
+  var expected: Int64
+}
+
 /// The operation changing the managed copy right now.
 nonisolated enum TartInstallationOperation: Equatable {
   /// `version` is nil until the release is known; `fraction` (0…1) is nil while it can't be measured.
@@ -123,6 +130,9 @@ final class TartInstallationStore {
   private(set) var managed = ManagedTartState()
   /// The install, rollback or removal running now.
   private(set) var operation: TartInstallationOperation?
+  /// How much of the archive the running install downloaded, while it downloads an archive of known
+  /// size.
+  private(set) var downloaded: TartDownloadAmount?
   /// Why the last install, rollback or removal failed; cleared when the next one starts.
   private(set) var operationError: String?
   /// What the last check, or the lookup of the last install, found.
@@ -253,6 +263,7 @@ final class TartInstallationStore {
   private func install(_ known: TartRelease?, id: UUID) async {
     defer {
       operation = nil
+      downloaded = nil
       installID = nil
       installTask = nil
     }
@@ -286,10 +297,15 @@ final class TartInstallationStore {
         progress.bytesExpected > 0
         ? min(1, max(0, Double(progress.bytesReceived) / Double(progress.bytesExpected))) : nil
       operation = .installing(version: version, phase: .downloading, fraction: fraction)
+      downloaded =
+        progress.bytesExpected > 0
+        ? TartDownloadAmount(received: progress.bytesReceived, expected: progress.bytesExpected) : nil
     case .verifying:
       operation = .installing(version: version, phase: .verifying, fraction: nil)
+      downloaded = nil
     case .installing:
       operation = .installing(version: version, phase: .installing, fraction: nil)
+      downloaded = nil
     }
   }
 
