@@ -37,6 +37,21 @@ struct CodeSignatureVerifierTests {
     #expect(signer.contains("ad-hoc"))
   }
 
+  @Test func explainsARejectionReadablyForAnyCopyOfTart() throws {
+    let scratch = try ScratchDirectory("signature")
+    defer { scratch.remove() }
+    let app = try makeApp(in: scratch, signing: .adHoc)
+
+    let error = try #require(throws: TartInstallError.self) { try verifier.verify(appAt: app) }
+    let reason = try #require(error.failureReason)
+    #expect(!reason.contains("OSStatus"), "\(reason)")
+    #expect(!reason.contains("couldn’t be completed"), "\(reason)")
+    let message = try #require(error.errorDescription)
+    #expect(message.hasPrefix("This copy of Tart"), "\(message)")
+    #expect(!message.contains("downloaded"), "\(message)")
+    #expect(message.contains("9M2P8L4D89"))
+  }
+
   @Test func rejectsAnUnsignedApp() throws {
     let scratch = try ScratchDirectory("signature")
     defer { scratch.remove() }

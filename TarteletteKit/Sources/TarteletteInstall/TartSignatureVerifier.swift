@@ -50,10 +50,11 @@ public struct CodeSignatureVerifier: TartSignatureVerifying {
       rawValue: kSecCSStrictValidate | kSecCSCheckAllArchitectures | kSecCSCheckNestedCode | kSecCSRestrictSymlinks)
     var failure: Unmanaged<CFError>?
     let status = SecStaticCodeCheckValidityWithErrors(code, flags, requirement, &failure)
+    failure?.release()
     guard status == errSecSuccess else {
-      let reason =
-        failure.map { CFErrorCopyDescription($0.takeRetainedValue()) as String } ?? Self.message(for: status)
-      throw TartInstallError.signatureRejected(signer: Self.signer(of: code), reason: reason)
+      // The Security framework's sentence for the status, such as "code failed to satisfy specified
+      // code requirement(s)", reads better than the CFError's "The operation couldn't be completed".
+      throw TartInstallError.signatureRejected(signer: Self.signer(of: code), reason: Self.message(for: status))
     }
   }
 
