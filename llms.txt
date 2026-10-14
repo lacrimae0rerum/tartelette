@@ -2,7 +2,7 @@
 
 > Tartelette is a native macOS app (Apple silicon, macOS 14 or later) for creating, running, configuring and monitoring Tart virtual machines, with a clipboard that works in both directions. It embeds an MCP server, `Tartelette.app/Contents/MacOS/tartelette-mcp`, that lets AI agents on the Mac use the VMs the user shares with them: it runs over stdio only, listens on no network port and works while the app is closed. Agent access is off by default; only the user can turn it on and share VMs, in the app.
 
-AI agents asked to set up Tartelette should read the agent setup guide first. Never grant yourself access: don't edit Tartelette's settings files, ask the user instead.
+AI agents asked to set up Tartelette should read the agent setup guide first. Never grant yourself access: don't edit Tartelette's settings files, ask the user instead. Never install or update Tart yourself either: the user does it in the app (Install Tart, or Check for Updates in Settings › General), and the MCP server uses the same Tart as the app, including the copy Tartelette manages.
 
 ## Agent setup
 

@@ -35,7 +35,7 @@ intent, not a security boundary. Respect them as the user's decision.
 
 1. [Check the Mac](#1-check-the-mac): Apple silicon, macOS 14 or later.
 2. [Check that the helper runs](#2-check-that-the-helper-runs): `tartelette-mcp --version`.
-3. [Check Tart](#3-check-tart): 2.27 or later.
+3. [Check Tart](#3-check-tart): 2.27 or later. Only the user installs or updates it.
 4. [Register the server](#4-register-the-server) with your client.
 5. [Verify the connection](#5-verify-the-connection): call `list_vms`.
 6. [Ask the user for access](#6-ask-the-user-for-access) if `list_vms` is refused or empty.
@@ -90,18 +90,29 @@ Then run `--version` again.
 
 ## 3. Check Tart
 
+Tartelette and `tartelette-mcp` use the same Tart: the one the user chose in
+**Settings › General**, otherwise the copy Tartelette manages, otherwise the first one found in
+`/opt/homebrew/bin`, `/usr/local/bin`, `/Applications/tart.app` or the `PATH`. Check the managed
+copy first:
+
 ```bash
-tart --version   # expect: 2.27 or later
+"$HOME/Library/Application Support/Tartelette/Tart/current/tart.app/Contents/MacOS/tart" --version
+tart --version
+/Applications/tart.app/Contents/MacOS/tart --version   # installed by hand, as on macOS 14
 ```
 
-If `tart` isn't on the `PATH`, try `/Applications/tart.app/Contents/MacOS/tart --version` (the
-macOS 14 install). If Tart is missing or older than 2.27, ask the user before installing or
-updating it, and use the
-[Install Tart](https://github.com/lacrimae0rerum/tartelette/blob/main/README.en.md#1-install-tart)
-commands for their macOS version. A Tart built from source reports `SNAPSHOT`, which the macOS
-guest agent rejects: use a released Tart.
+The managed copy isn't on the `PATH` unless the user added it, so `tart: command not found` alone
+doesn't mean Tart is missing.
 
-**Check:** a version of 2.27 or later.
+**Never install or update Tart yourself**, and never change
+`~/Library/Application Support/Tartelette/Tart`. If Tart is missing or older than 2.27, tell the
+user: they can press **Install Tart** on Tartelette's **Tart Isn't Installed** screen, or
+**Check for Updates** in **Settings › General › Tart** and update from there; Tartelette downloads
+and verifies the official release. [Install Tart](https://github.com/lacrimae0rerum/tartelette/blob/main/README.en.md#1-install-tart)
+in the README also has the Homebrew commands. A Tart built from source reports `SNAPSHOT`, which
+the macOS guest agent rejects: use a released Tart.
+
+**Check:** the first command that answers prints 2.27 or later.
 
 ## 4. Register the server
 
@@ -141,7 +152,7 @@ Call `list_vms`.
 | "Agent access is turned off…" | The user hasn't enabled agents | [Ask the user](#6-ask-the-user-for-access) to turn it on |
 | An empty list | Agents are on, but no VM is shared | [Ask the user](#6-ask-the-user-for-access) to share VMs |
 | "Tartelette's agent settings couldn't be read…" | The settings file is damaged | Ask the user to open **Settings › Agents** and choose **Reset Agent Settings…** (it turns agents off and unshares every VM) |
-| "Tartelette couldn't find the tart executable…" | Tart is missing or in an unknown place | Go back to [step 3](#3-check-tart), or ask the user to choose Tart's location in **Tartelette › Settings** |
+| "Tartelette couldn't find the tart executable…" | Tart is missing or in an unknown place | Go back to [step 3](#3-check-tart): ask the user to press **Install Tart** in Tartelette, or to choose Tart's location in **Tartelette › Settings** |
 | The tool doesn't exist | The client didn't load the server | Go back to [step 4](#4-register-the-server) |
 
 ## 6. Ask the user for access
@@ -186,7 +197,7 @@ wants you to change directly. Changes apply on your next call: call `list_vms` a
 | Symptom | Cause | What to do |
 |---------|-------|------------|
 | `tartelette-mcp` is killed (exit code 137), or the client says the server failed to start | Quarantine flag on a copy downloaded with a browser | Tell the user; remove the flag only with their explicit approval ([step 2](#2-check-that-the-helper-runs)) |
-| `tart: command not found`, or "Tartelette couldn't find the tart executable…" | Tart isn't installed or isn't on the `PATH` | [Step 3](#3-check-tart) |
+| `tart: command not found`, or "Tartelette couldn't find the tart executable…" | Tart isn't installed, or (for `command not found`) Tart is the copy Tartelette manages, which isn't on the `PATH` | [Step 3](#3-check-tart); never install Tart yourself |
 | "The Tart Guest Agent in “…” isn't answering" | The VM is still booting, or the guest has no Tart Guest Agent | Call `start_vm` with `wait: true`; otherwise ask the user to use a Cirrus Labs image or install `tart-guest-agent` in the guest |
 | "Agent access is turned off…" | Agents are off | [Ask the user](#6-ask-the-user-for-access) to turn them on |
 | A VM is missing from `list_vms`, or "VM “…” isn't shared with agents" | The VM isn't shared | [Ask the user](#6-ask-the-user-for-access) to share it |
