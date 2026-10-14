@@ -226,8 +226,12 @@ public struct ManagedTartInstaller: Sendable {
   private func place(_ payload: URL, as version: String, setAsideIn work: URL) throws {
     let fileManager = FileManager.default
     let versions = layout.versionsDirectory
-    let createdVersions = !fileManager.fileExists(atPath: versions.path)
-    if createdVersions { try fileManager.createDirectory(at: versions, withIntermediateDirectories: false) }
+    let createdVersions = !Self.itemExists(versions)
+    if createdVersions {
+      try fileManager.createDirectory(at: versions, withIntermediateDirectories: false)
+    } else if try Self.fileType(versions) != .typeDirectory {
+      throw TartInstallError.fileSystem(reason: "\(versions.path) isn't a folder.")
+    }
     let destination = layout.versionDirectory(version)
     var replaced: URL?
     func undo() {
@@ -290,8 +294,7 @@ public struct ManagedTartInstaller: Sendable {
     do {
       // A new relative link renamed over `current`: atomic, and running processes keep their binary.
       // It is made in `staging/`, so a crash before the rename leaves nothing outside scratch space.
-      try fileManager.createDirectory(at: layout.stagingDirectory, withIntermediateDirectories: true)
-      let link = layout.stagingDirectory.appendingPathComponent("current-\(UUID().uuidString)")
+      let link = try prepareStaging().appendingPathComponent("current-\(UUID().uuidString)")
       try fileManager.createSymbolicLink(atPath: link.path, withDestinationPath: "versions/\(version)")
       do {
         try Self.rename(link, to: layout.currentLink, replacing: true)
@@ -386,8 +389,10 @@ public struct ManagedTartInstaller: Sendable {
 
   // MARK: - Layout
 
-  /// Installed versions, oldest first: real folders in `versions/` that hold a `tart.app`.
+  /// Installed versions, oldest first: real folders in `versions/` that hold a `tart.app`. Nothing is
+  /// installed when `versions` itself is a link, so no operation acts through it.
   private func installedVersions() -> [String] {
+    guard (try? Self.fileType(layout.versionsDirectory)) == .typeDirectory else { return [] }
     let names = (try? FileManager.default.contentsOfDirectory(atPath: layout.versionsDirectory.path)) ?? []
     return names.filter(isInstalled).sorted { lhs, rhs in
       switch (TartVersion(lhs), TartVersion(rhs)) {
@@ -398,7 +403,9 @@ public struct ManagedTartInstaller: Sendable {
   }
 
   private func isInstalled(_ version: String) -> Bool {
-    guard !version.hasPrefix(".") else { return false }
+    guard !version.hasPrefix("."), (try? Self.fileType(layout.versionsDirectory)) == .typeDirectory else {
+      return false
+    }
     let directory = layout.versionDirectory(version)
     return (try? Self.fileType(directory)) == .typeDirectory
       && (try? Self.fileType(directory.appendingPathComponent("tart.app"))) == .typeDirectory
@@ -418,16 +425,33 @@ public struct ManagedTartInstaller: Sendable {
 
   /// A new, empty folder in `staging/`, on the same volume as `versions/` so moves are renames.
   private func makeWorkDirectory() throws -> URL {
-    let directory = layout.stagingDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
-    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let directory = try prepareStaging().appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
     return directory
   }
 
-  /// Deletes whatever an interrupted operation left in `staging/`. Safe under the lock: no other
-  /// operation is running.
-  private func cleanStaging() throws {
+  /// Makes `staging/` a real folder and returns it. A link or file in its place is removed itself,
+  /// never what a link points to.
+  private func prepareStaging() throws -> URL {
     let staging = layout.stagingDirectory
-    for item in (try? FileManager.default.contentsOfDirectory(atPath: staging.path)) ?? [] {
+    switch try? Self.fileType(staging) {
+    case .typeDirectory?:
+      return staging
+    case nil:
+      break
+    default:
+      guard unlink(staging.path) == 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+    }
+    try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: false)
+    return staging
+  }
+
+  /// Deletes whatever an interrupted operation left in `staging/`, without following links. Safe
+  /// under the lock: no other operation is running.
+  private func cleanStaging() throws {
+    let staging = try prepareStaging()
+    for item in try FileManager.default.contentsOfDirectory(atPath: staging.path) {
+      // `removeItem` deletes a link itself, and a folder's contents without following links.
       try FileManager.default.removeItem(at: staging.appendingPathComponent(item))
     }
   }
@@ -471,7 +495,8 @@ public struct ManagedTartInstaller: Sendable {
     let descriptor: Int32
     do {
       try FileManager.default.createDirectory(at: layout.root, withIntermediateDirectories: true)
-      descriptor = open(layout.lockFile.path, O_RDWR | O_CREAT | O_CLOEXEC, 0o644)
+      // Never through a link: a `.lock` link fails with ELOOP instead of creating its target.
+      descriptor = open(layout.lockFile.path, O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0o644)
       guard descriptor >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
     } catch {
       throw TartInstallError.fileSystem(error)

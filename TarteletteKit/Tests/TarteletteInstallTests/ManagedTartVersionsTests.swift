@@ -196,4 +196,98 @@ struct ManagedTartVersionsTests {
     #expect(error?.errorDescription?.contains("Stop those virtual machines") == true)
     #expect(LayoutSnapshot(fixture.layout.root) == before)
   }
+
+  // MARK: - Links inside the managed folder are never followed
+
+  /// A folder outside the managed root holding `keep.txt`, and its listing.
+  func outsideFolder(_ fixture: InstallerFixture) throws -> URL {
+    let outside = fixture.scratch.appending("outside")
+    try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+    try Data("keep".utf8).write(to: outside.appendingPathComponent("keep.txt"))
+    return outside
+  }
+
+  func isRealDirectory(_ url: URL) -> Bool {
+    (try? FileManager.default.attributesOfItem(atPath: url.path))?[.type] as? FileAttributeType == .typeDirectory
+  }
+
+  @Test func cleaningStagingRemovesAStagingLinkButNeverItsTarget() async throws {
+    let fixture = try InstallerFixture()
+    defer { fixture.remove() }
+    let outside = try outsideFolder(fixture)
+    try FileManager.default.createDirectory(at: fixture.managed(""), withIntermediateDirectories: true)
+    try FileManager.default.createSymbolicLink(at: fixture.managed("staging"), withDestinationURL: outside)
+
+    try await fixture.installer.install(try fixture.publish("2.42.0"))
+
+    #expect(try FileManager.default.contentsOfDirectory(atPath: outside.path) == ["keep.txt"])
+    #expect(isRealDirectory(fixture.managed("staging")))
+    #expect(fixture.stagingIsEmpty)
+  }
+
+  @Test func replacesAStagingFileWithAFolder() async throws {
+    let fixture = try InstallerFixture()
+    defer { fixture.remove() }
+    try FileManager.default.createDirectory(at: fixture.managed(""), withIntermediateDirectories: true)
+    try Data("not a folder".utf8).write(to: fixture.managed("staging"))
+
+    try await fixture.installer.install(try fixture.publish("2.42.0"))
+
+    #expect(isRealDirectory(fixture.managed("staging")))
+    #expect(fixture.currentDestination == "versions/2.42.0")
+  }
+
+  @Test func switchingNeverWritesThroughAStagingLink() async throws {
+    let fixture = try InstallerFixture()
+    defer { fixture.remove() }
+    try await fixture.installer.install(try fixture.publish("2.41.0"))
+    try await fixture.installer.install(try fixture.publish("2.42.0"))
+    let outside = try outsideFolder(fixture)
+    try FileManager.default.removeItem(at: fixture.managed("staging"))
+    try FileManager.default.createSymbolicLink(at: fixture.managed("staging"), withDestinationURL: outside)
+
+    try await fixture.installer.rollback()
+
+    #expect(fixture.currentDestination == "versions/2.41.0")
+    #expect(isRealDirectory(fixture.managed("staging")))
+    #expect(try FileManager.default.contentsOfDirectory(atPath: outside.path) == ["keep.txt"])
+  }
+
+  @Test func refusesALockFileThatIsALink() async throws {
+    let fixture = try InstallerFixture()
+    defer { fixture.remove() }
+    let outside = try outsideFolder(fixture)
+    try FileManager.default.createDirectory(at: fixture.managed(""), withIntermediateDirectories: true)
+    try FileManager.default.createSymbolicLink(
+      at: fixture.managed(".lock"), withDestinationURL: outside.appendingPathComponent("lock"))
+
+    let error = await #expect(throws: TartInstallError.self) {
+      try await fixture.installer.install(try fixture.publish("2.42.0"))
+    }
+    guard case .fileSystem = error else {
+      Issue.record("Expected a file system failure, got \(String(describing: error))")
+      return
+    }
+    #expect(try FileManager.default.contentsOfDirectory(atPath: outside.path) == ["keep.txt"])
+    #expect(fixture.currentDestination == nil)
+  }
+
+  @Test func neverPrunesOrRemovesThroughAVersionsLink() async throws {
+    let fixture = try InstallerFixture()
+    defer { fixture.remove() }
+    let outside = try outsideFolder(fixture)
+    for version in ["2.40.0", "2.41.0"] {
+      try FileManager.default.createDirectory(
+        at: outside.appendingPathComponent("\(version)/tart.app/Contents"), withIntermediateDirectories: true)
+    }
+    try FileManager.default.createDirectory(at: fixture.managed(""), withIntermediateDirectories: true)
+    try FileManager.default.createSymbolicLink(at: fixture.managed("versions"), withDestinationURL: outside)
+
+    #expect(try await fixture.installer.prune() == [])
+    try await fixture.installer.remove()
+
+    let left = try FileManager.default.contentsOfDirectory(atPath: outside.path).sorted()
+    #expect(left == ["2.40.0", "2.41.0", "keep.txt"])
+    #expect(!FileManager.default.fileExists(atPath: fixture.managed("").path))
+  }
 }
