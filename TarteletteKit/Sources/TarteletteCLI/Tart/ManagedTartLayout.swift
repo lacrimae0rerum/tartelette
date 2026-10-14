@@ -6,6 +6,8 @@ import Foundation
 /// <root>/versions/<version>/tart.app   one directory per installed version
 /// <root>/current -> versions/<version> relative link selecting the active version
 /// <root>/staging/                      scratch space for downloads and extraction
+/// <root>/manifest.json                 the version to go back to
+/// <root>/.lock                         held by the installer while it changes the layout
 /// ```
 ///
 /// Versions live side by side and the `current` link is switched atomically, so new commands use the
@@ -39,6 +41,12 @@ public struct ManagedTartLayout: Sendable, Hashable {
 
   /// Scratch space for downloads and extraction, on the same volume as `versionsDirectory`.
   public var stagingDirectory: URL { root.appendingPathComponent("staging", isDirectory: true) }
+
+  /// The installer's record of the version that was active before the current one.
+  public var manifestFile: URL { root.appendingPathComponent("manifest.json") }
+
+  /// The file the installer locks so only one process changes the layout at a time.
+  public var lockFile: URL { root.appendingPathComponent(".lock") }
 
   /// The active version's `tart` executable, reached through the `current` link.
   public var currentExecutable: URL { currentLink.appendingPathComponent("tart.app/Contents/MacOS/tart") }
