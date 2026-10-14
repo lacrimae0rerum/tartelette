@@ -15,6 +15,8 @@ enum ArchiveContents: Sendable, CustomStringConvertible {
   case withoutApp
   /// `tart.app`, `LICENSE` and a `README`.
   case withExtraEntry
+  /// `LICENSE` is a symbolic link into `tart.app`.
+  case licenseIsSymlink
   /// Bytes that aren't a gzipped tar archive.
   case notAnArchive
 
@@ -25,6 +27,7 @@ enum ArchiveContents: Sendable, CustomStringConvertible {
     case .withoutLicense: "no LICENSE"
     case .withoutApp: "no tart.app"
     case .withExtraEntry: "an extra README"
+    case .licenseIsSymlink: "LICENSE is a symlink"
     case .notAnArchive: "not an archive"
     }
   }
@@ -189,7 +192,7 @@ struct InstallerFixture {
     let tart = macOS.appendingPathComponent("tart")
     try executable(version).write(to: tart)
     try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: tart.path)
-    try license.write(to: payload.appendingPathComponent("LICENSE"))
+    if contents != .licenseIsSymlink { try license.write(to: payload.appendingPathComponent("LICENSE")) }
 
     var entries = ["tart.app", "LICENSE"]
     switch contents {
@@ -201,6 +204,9 @@ struct InstallerFixture {
     case .withExtraEntry:
       try Data("read me".utf8).write(to: payload.appendingPathComponent("README"))
       entries.append("README")
+    case .licenseIsSymlink:
+      try fileManager.createSymbolicLink(
+        atPath: payload.appendingPathComponent("LICENSE").path, withDestinationPath: "tart.app/Contents/Info.plist")
     case .standard, .notAnArchive: break
     }
 

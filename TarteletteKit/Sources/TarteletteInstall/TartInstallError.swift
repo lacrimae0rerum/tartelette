@@ -17,7 +17,7 @@ public enum TartInstallError: LocalizedError, Sendable, Equatable {
   case checksumMismatch(fileName: String)
   /// `/usr/bin/tar` couldn't unpack the archive.
   case extractionFailed(reason: String)
-  /// The archive doesn't hold exactly a `tart.app` folder and its LICENSE.
+  /// The archive doesn't hold a real `tart.app` folder.
   case unexpectedArchive(reason: String)
   /// `tart.app` isn't signed by Tart's developer, or was modified. `signer` says who signed it, in words.
   case signatureRejected(signer: String, reason: String)
@@ -55,8 +55,8 @@ public enum TartInstallError: LocalizedError, Sendable, Equatable {
       return "Tartelette couldn't unpack the downloaded Tart archive. Nothing was installed. Try again; if it "
         + "keeps happening, look for a newer version of Tartelette."
     case .unexpectedArchive:
-      return "The downloaded Tart archive doesn't contain what Tartelette expects (tart.app and its LICENSE), "
-        + "so nothing was installed. Look for a newer version of Tartelette."
+      return "The downloaded Tart archive doesn't contain what Tartelette expects (a tart.app folder), so "
+        + "nothing was installed. Look for a newer version of Tartelette."
     case .signatureRejected(let signer, _):
       return "The downloaded Tart failed the signature check (it must be signed by its developer, Cirrus Labs, "
         + "team 9M2P8L4D89, and be unmodified), so Tartelette didn't install it. Its signature: \(signer). "

@@ -83,8 +83,9 @@ public struct ManagedTartInstaller: Sendable {
   /// Downloads `release`, verifies it and makes it the active version, keeping the one it replaces
   /// for `rollback()`. Versions other than those two are then pruned when no process runs them.
   ///
-  /// The archive's SHA-256 must match the release's checksums file, it must hold exactly `tart.app`
-  /// and its LICENSE, and `tart.app` must pass the signature check and report the release's version.
+  /// The archive's SHA-256 must match the release's checksums file, it must hold a `tart.app` folder,
+  /// and `tart.app` must pass the signature check and report the release's version. Only `tart.app`
+  /// and the archive's LICENSE (when it is a regular file) are installed; anything else is ignored.
   /// A version that is already installed is selected without downloading anything.
   ///
   /// - Throws: `TartInstallError`, `TartReleaseError` for a damaged checksums file, or
@@ -128,14 +129,13 @@ public struct ManagedTartInstaller: Sendable {
       guard try Self.sha256(of: archive) == expectedSHA256 else {
         throw TartInstallError.checksumMismatch(fileName: release.archive.name)
       }
-      let unpacked = work.appendingPathComponent("unpacked", isDirectory: true)
-      try await extract(archive, into: unpacked)
+      let payload = try await extract(archive, in: work)
       try Task.checkCancellation()
-      try verifyBundle(at: unpacked.appendingPathComponent("tart.app"), is: release.version)
+      try verifyBundle(at: payload.appendingPathComponent("tart.app"), is: release.version)
 
       progress(TartInstallProgress(phase: .installing, bytesReceived: expected, bytesExpected: expected))
       try Task.checkCancellation()
-      try place(unpacked, as: version)
+      try place(payload, as: version)
       _ = try? pruneUnusedVersions()
       return state()
     }
@@ -156,9 +156,12 @@ public struct ManagedTartInstaller: Sendable {
     return hasher.finalize().map { String(format: "%02x", $0) }.joined()
   }
 
-  /// Unpacks `archive` with `/usr/bin/tar` and checks it holds exactly a `tart.app` folder and a
-  /// LICENSE file. tar refuses absolute paths, `..` and writing through links by default.
-  private func extract(_ archive: URL, into directory: URL) async throws {
+  /// Unpacks `archive` with `/usr/bin/tar` into `work` and returns a new folder in `work` holding
+  /// what gets installed: the archive's `tart.app`, which must be a real folder, and its LICENSE when
+  /// that is a regular file. Other top-level entries stay behind and are deleted with `work`. tar
+  /// refuses absolute paths, `..` and writing through links by default.
+  private func extract(_ archive: URL, in work: URL) async throws -> URL {
+    let directory = work.appendingPathComponent("unpacked", isDirectory: true)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
     let output: CommandOutput
     do {
@@ -176,16 +179,20 @@ public struct ManagedTartInstaller: Sendable {
       throw TartInstallError.extractionFailed(reason: output.diagnostic)
     }
 
-    let entries = try FileManager.default.contentsOfDirectory(atPath: directory.path).sorted()
-    guard entries == ["LICENSE", "tart.app"] else {
-      throw TartInstallError.unexpectedArchive(reason: "It contains: \(entries.joined(separator: ", ")).")
+    let app = directory.appendingPathComponent("tart.app")
+    guard (try? Self.fileType(app)) == .typeDirectory else {
+      let entries = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
+      throw TartInstallError.unexpectedArchive(
+        reason: "It has no tart.app folder; it contains: \(entries.sorted().joined(separator: ", ")).")
     }
-    guard try Self.fileType(directory.appendingPathComponent("tart.app")) == .typeDirectory else {
-      throw TartInstallError.unexpectedArchive(reason: "tart.app isn't a folder.")
+    let payload = work.appendingPathComponent("payload", isDirectory: true)
+    try FileManager.default.createDirectory(at: payload, withIntermediateDirectories: false)
+    try Self.rename(app, to: payload.appendingPathComponent("tart.app"), replacing: false)
+    let license = directory.appendingPathComponent("LICENSE")
+    if (try? Self.fileType(license)) == .typeRegular {
+      try Self.rename(license, to: payload.appendingPathComponent("LICENSE"), replacing: false)
     }
-    guard try Self.fileType(directory.appendingPathComponent("LICENSE")) == .typeRegular else {
-      throw TartInstallError.unexpectedArchive(reason: "LICENSE isn't a regular file.")
-    }
+    return payload
   }
 
   /// The type of the item at `url` itself, without following a symbolic link.
@@ -208,14 +215,14 @@ public struct ManagedTartInstaller: Sendable {
   }
 
   /// Moves the verified version into `versions/` and selects it, undoing the move if selecting fails.
-  private func place(_ unpacked: URL, as version: String) throws {
+  private func place(_ payload: URL, as version: String) throws {
     let fileManager = FileManager.default
     let versions = layout.versionsDirectory
     let createdVersions = !fileManager.fileExists(atPath: versions.path)
     if createdVersions { try fileManager.createDirectory(at: versions, withIntermediateDirectories: false) }
     let destination = layout.versionDirectory(version)
     do {
-      try Self.rename(unpacked, to: destination, replacing: false)
+      try Self.rename(payload, to: destination, replacing: false)
     } catch {
       if createdVersions { try? fileManager.removeItem(at: versions) }
       throw error
@@ -223,7 +230,7 @@ public struct ManagedTartInstaller: Sendable {
     do {
       try select(version)
     } catch {
-      try? Self.rename(destination, to: unpacked, replacing: false)
+      try? Self.rename(destination, to: payload, replacing: false)
       if createdVersions { try? fileManager.removeItem(at: versions) }
       throw error
     }

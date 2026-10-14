@@ -111,6 +111,22 @@ struct ManagedTartInstallerTests {
     #expect(fixture.downloader.calls.count == downloads)
   }
 
+  @Test(arguments: [
+    (ArchiveContents.withExtraEntry, ["LICENSE", "tart.app"]), (.withoutLicense, ["tart.app"]),
+    (.licenseIsSymlink, ["tart.app"]),
+  ])
+  func installsOnlyTartAppAndARegularLicense(_ contents: ArchiveContents, installed: [String]) async throws {
+    let fixture = try InstallerFixture()
+    defer { fixture.remove() }
+
+    try await fixture.installer.install(try fixture.publish("2.42.0", contents: contents))
+
+    let entries = try FileManager.default.contentsOfDirectory(atPath: fixture.managed("versions/2.42.0").path)
+    #expect(entries.sorted() == installed)
+    #expect(fixture.currentDestination == "versions/2.42.0")
+    #expect(fixture.stagingIsEmpty)
+  }
+
   @Test func cleansStagingLeftByAnEarlierCrash() async throws {
     let fixture = try InstallerFixture()
     defer { fixture.remove() }
@@ -203,7 +219,7 @@ struct ManagedTartInstallerTests {
     }
   }
 
-  @Test(arguments: [ArchiveContents.appIsSymlink, .withoutLicense, .withoutApp, .withExtraEntry])
+  @Test(arguments: [ArchiveContents.appIsSymlink, .withoutApp])
   func refusesAnArchiveWithUnexpectedContents(_ contents: ArchiveContents) async throws {
     let fixture = try await installedFixture()
     defer { fixture.remove() }
