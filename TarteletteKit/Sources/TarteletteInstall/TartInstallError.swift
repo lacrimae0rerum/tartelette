@@ -31,6 +31,8 @@ public enum TartInstallError: LocalizedError, Sendable, Equatable {
   case busy
   /// There is no earlier version to go back to.
   case noPreviousVersion
+  /// The running processes couldn't be listed, so no version was removed or replaced.
+  case runningProcessesUnknown(reason: String)
   /// Running processes execute these installed versions, so they can't be removed or replaced.
   case inUse(versions: [String])
 
@@ -75,6 +77,9 @@ public enum TartInstallError: LocalizedError, Sendable, Equatable {
         + "then try again."
     case .noPreviousVersion:
       return "There's no earlier version of Tart to go back to."
+    case .runningProcessesUnknown:
+      return "Tartelette couldn't check which versions of Tart are running, so it didn't remove or replace "
+        + "any. Try again."
     case .inUse(let versions):
       let names = versions.joined(separator: ", ")
       return "Tart \(names) is still running (a virtual machine or a tart command uses it), so Tartelette "
@@ -86,7 +91,7 @@ public enum TartInstallError: LocalizedError, Sendable, Equatable {
     switch self {
     case .insecureURL(let url): url
     case .network(let reason), .extractionFailed(let reason), .unexpectedArchive(let reason),
-      .signatureRejected(_, let reason), .fileSystem(let reason):
+      .signatureRejected(_, let reason), .fileSystem(let reason), .runningProcessesUnknown(let reason):
       reason
     default: nil
     }

@@ -7,23 +7,30 @@ import Foundation
 public protocol RunningExecutablesProviding: Sendable {
   /// The executable path of every process this user can see, symbolic links resolved, such as
   /// `…/Tart/versions/2.41.0/tart.app/Contents/MacOS/tart`.
-  func runningExecutablePaths() -> [String]
+  ///
+  /// Throws `TartInstallError.runningProcessesUnknown` when the processes can't be listed, so callers
+  /// never mistake a failed listing for "nothing is running".
+  func runningExecutablePaths() throws -> [String]
 }
 
 /// Lists running processes with `proc_listpids` and their executables with `proc_pidpath`.
 public struct ProcessListRunningExecutables: RunningExecutablesProviding {
   public init() {}
 
-  public func runningExecutablePaths() -> [String] {
+  public func runningExecutablePaths() throws -> [String] {
     let size = proc_listpids(UInt32(PROC_ALL_PIDS), 0, nil, 0)
-    guard size > 0 else { return [] }
+    guard size > 0 else { throw Self.listingFailed() }
     // Room for processes started between the two calls.
     var pids = [pid_t](repeating: 0, count: Int(size) / MemoryLayout<pid_t>.stride + 64)
     let filled = pids.withUnsafeMutableBytes { buffer in
       proc_listpids(UInt32(PROC_ALL_PIDS), 0, buffer.baseAddress, Int32(buffer.count))
     }
-    guard filled > 0 else { return [] }
+    guard filled > 0 else { throw Self.listingFailed() }
     return pids.prefix(Int(filled) / MemoryLayout<pid_t>.stride).filter { $0 > 0 }.compactMap(Self.executablePath)
+  }
+
+  private static func listingFailed() -> TartInstallError {
+    .runningProcessesUnknown(reason: "proc_listpids: \(String(cString: strerror(errno)))")
   }
 
   /// `PROC_PIDPATHINFO_MAXSIZE` (4 × MAXPATHLEN), which Swift doesn't import.

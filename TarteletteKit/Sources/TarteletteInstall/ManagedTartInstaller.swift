@@ -265,7 +265,7 @@ public struct ManagedTartInstaller: Sendable {
 
   /// Throws `TartInstallError.inUse` when a running process executes `version`.
   private func refuseIfRunning(_ version: String) throws {
-    if isRunning(version, among: runningExecutables.runningExecutablePaths()) {
+    if isRunning(version, among: try runningExecutables.runningExecutablePaths()) {
       throw TartInstallError.inUse(versions: [version])
     }
   }
@@ -330,6 +330,9 @@ public struct ManagedTartInstaller: Sendable {
 
   /// Removes installed versions other than the current and the previous one, except those a running
   /// process executes. Returns the versions removed.
+  ///
+  /// - Throws: `TartInstallError.runningProcessesUnknown`, removing nothing, when the running
+  ///   processes can't be listed.
   @discardableResult
   public func prune() async throws -> [String] {
     guard FileManager.default.fileExists(atPath: layout.root.path) else { return [] }
@@ -339,7 +342,7 @@ public struct ManagedTartInstaller: Sendable {
   private func pruneUnusedVersions() throws -> [String] {
     let state = state()
     let keep = Set([state.current, state.previous].compactMap { $0 })
-    let running = runningExecutables.runningExecutablePaths()
+    let running = try runningExecutables.runningExecutablePaths()
     let unused = state.installed.filter { !keep.contains($0) && !isRunning($0, among: running) }
     guard !unused.isEmpty else { return [] }
 
@@ -363,12 +366,13 @@ public struct ManagedTartInstaller: Sendable {
 
   /// Deletes the managed copy: every version, `current`, the manifest and the scratch space.
   ///
-  /// - Throws: `TartInstallError.inUse` while a running process executes any installed version.
-  ///   Nothing changes on failure.
+  /// - Throws: `TartInstallError.inUse` while a running process executes any installed version, and
+  ///   `TartInstallError.runningProcessesUnknown` when the processes can't be listed. Nothing changes
+  ///   on failure.
   public func remove() async throws {
     guard FileManager.default.fileExists(atPath: layout.root.path) else { return }
     try await exclusively {
-      let running = runningExecutables.runningExecutablePaths()
+      let running = try runningExecutables.runningExecutablePaths()
       let inUse = installedVersions().filter { isRunning($0, among: running) }
       guard inUse.isEmpty else { throw TartInstallError.inUse(versions: inUse) }
 

@@ -101,13 +101,20 @@ final class FakeVerifier: TartSignatureVerifying, @unchecked Sendable {
   }
 }
 
-/// A fixed list of running executables.
+/// A fixed list of running executables, or a failure to list them.
 final class FakeRunningExecutables: RunningExecutablesProviding, @unchecked Sendable {
   private let lock = NSLock()
   private var paths: [String] = []
+  private var failure: (any Error)?
 
   func set(_ paths: [String]) { lock.withLock { self.paths = paths } }
-  func runningExecutablePaths() -> [String] { lock.withLock { paths } }
+  func fail(with error: (any Error)?) { lock.withLock { failure = error } }
+
+  func runningExecutablePaths() throws -> [String] {
+    let (paths, failure) = lock.withLock { (self.paths, self.failure) }
+    if let failure { throw failure }
+    return paths
+  }
 }
 
 /// A scratch managed layout, fake releases and the installer's test doubles.
