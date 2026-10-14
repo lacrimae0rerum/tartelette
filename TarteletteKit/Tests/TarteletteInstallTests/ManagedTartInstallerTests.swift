@@ -49,6 +49,14 @@ struct ManagedTartInstallerTests {
     #expect(archiveLimit <= release.archive.size * 2 + 1_048_576)
   }
 
+  @Test func theDownloadLimitStaysAboveTheAnnouncedSizeWithoutOverflowing() {
+    #expect(ManagedTartInstaller.downloadLimit(22_951_976) == 22_951_976 + 5_737_994 + 1_048_576)
+    #expect(ManagedTartInstaller.downloadLimit(0) == 1_048_576)
+    #expect(ManagedTartInstaller.downloadLimit(-5) == 1_048_576)
+    #expect(ManagedTartInstaller.downloadLimit(.max - 1024) == .max)
+    #expect(ManagedTartInstaller.downloadLimit(.max) == .max)
+  }
+
   @Test func reportsDownloadingThenVerifyingThenInstalling() async throws {
     let fixture = try InstallerFixture()
     defer { fixture.remove() }

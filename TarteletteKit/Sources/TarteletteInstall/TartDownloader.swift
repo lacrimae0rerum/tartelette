@@ -148,7 +148,7 @@ private final class Transfer: NSObject, URLSessionDataDelegate, @unchecked Senda
       return completionHandler(.cancel)
     }
     do {
-      // A new file: never write into one that already exists.
+      // Creates the file, emptying one already there; the installer always downloads into a new folder.
       guard FileManager.default.createFile(atPath: destination.path, contents: nil),
         let handle = FileHandle(forWritingAtPath: destination.path)
       else { throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: destination.path]) }
