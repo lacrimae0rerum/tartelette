@@ -109,13 +109,13 @@ struct ManagedTartInstallerTests {
     try await fixture.installer.install(try fixture.publish("2.41.0"))
     let release = try fixture.publish("2.42.0")
     try await fixture.installer.install(release)
-    let before = LayoutSnapshot(fixture.layout.root)
+    let before = RootSnapshot(fixture.layout.root)
     try #require(before.entries["current"] == "link → versions/2.42.0")
     let downloads = fixture.downloader.calls.count
 
     try await fixture.installer.install(release)
 
-    #expect(LayoutSnapshot(fixture.layout.root) == before)
+    #expect(RootSnapshot(fixture.layout.root) == before)
     #expect(fixture.downloader.calls.count == downloads)
   }
 
@@ -198,12 +198,12 @@ struct ManagedTartInstallerTests {
     try await fixture.installer.install(try fixture.publish("2.42.0"))
     fixture.verifier.reject(appsIn: fixture.managed("versions/2.41.0"), with: Self.rejection)
     fixture.running.set([fixture.realPath("versions/2.41.0/tart.app/Contents/MacOS/tart")])
-    let before = LayoutSnapshot(fixture.layout.root)
+    let before = RootSnapshot(fixture.layout.root)
     let downloads = fixture.downloader.calls.count
 
     await #expect(throws: TartInstallError.inUse(versions: ["2.41.0"])) { try await fixture.installer.install(older) }
 
-    #expect(LayoutSnapshot(fixture.layout.root) == before)
+    #expect(RootSnapshot(fixture.layout.root) == before)
     #expect(fixture.downloader.calls.count == downloads)
     #expect(fixture.stagingIsEmpty)
   }
@@ -217,7 +217,7 @@ struct ManagedTartInstallerTests {
     // A folder where the link should be can't be replaced by renaming a link over it.
     try FileManager.default.removeItem(at: fixture.managed("current"))
     try FileManager.default.createDirectory(at: fixture.managed("current/keep"), withIntermediateDirectories: true)
-    let before = LayoutSnapshot(fixture.layout.root)
+    let before = RootSnapshot(fixture.layout.root)
 
     let error = await #expect(throws: TartInstallError.self) {
       try await fixture.installer.install(try fixture.publish("2.42.0"))
@@ -226,7 +226,7 @@ struct ManagedTartInstallerTests {
       Issue.record("Expected a file system failure, got \(String(describing: error))")
       return
     }
-    #expect(LayoutSnapshot(fixture.layout.root) == before)
+    #expect(RootSnapshot(fixture.layout.root) == before)
     #expect(fixture.stagingIsEmpty)
   }
 
@@ -245,16 +245,16 @@ struct ManagedTartInstallerTests {
   // MARK: - Failures leave everything as it was
 
   /// Runs `failingOperation`, which expects its own failure, on a fixture where 2.41.0 is installed,
-  /// and checks that `versions/`, `current` and the manifest are byte-identical afterwards and that
-  /// staging is empty.
+  /// and checks that everything under the root, `.lock` and `staging/` included, is byte-identical
+  /// afterwards.
   func expectNothingChanges(
     _ fixture: InstallerFixture, sourceLocation: SourceLocation = #_sourceLocation,
     when failingOperation: () async throws -> Void
   ) async throws {
-    let before = LayoutSnapshot(fixture.layout.root)
+    let before = RootSnapshot(fixture.layout.root)
     #expect(before.entries["current"] == "link → versions/2.41.0", sourceLocation: sourceLocation)
     try await failingOperation()
-    let after = LayoutSnapshot(fixture.layout.root)
+    let after = RootSnapshot(fixture.layout.root)
     #expect(after == before, "the layout changed:\n\(after)", sourceLocation: sourceLocation)
     #expect(fixture.stagingIsEmpty, sourceLocation: sourceLocation)
   }
@@ -385,18 +385,19 @@ struct ManagedTartInstallerTests {
     // A folder where the link should be can't be replaced by renaming a link over it.
     try FileManager.default.removeItem(at: fixture.managed("current"))
     try FileManager.default.createDirectory(at: fixture.managed("current/keep"), withIntermediateDirectories: true)
-    let before = LayoutSnapshot(fixture.layout.root)
+    let before = RootSnapshot(fixture.layout.root)
 
     let error = await #expect(throws: TartInstallError.self) { try await fixture.installer.install(release) }
     guard case .fileSystem = error else {
       Issue.record("Expected a file system failure, got \(String(describing: error))")
       return
     }
-    #expect(LayoutSnapshot(fixture.layout.root) == before)
+    #expect(RootSnapshot(fixture.layout.root) == before)
     #expect(fixture.stagingIsEmpty)
   }
 
-  @Test func cancellingLeavesNothingBehind() async throws {
+  @Test(.timeLimit(.minutes(1)))
+  func cancellingLeavesNothingBehind() async throws {
     let fixture = try await installedFixture()
     defer { fixture.remove() }
     let release = try fixture.publish("2.42.0")
@@ -412,6 +413,33 @@ struct ManagedTartInstallerTests {
       install.cancel()
       await #expect(throws: CancellationError.self) { try await install.value }
     }
+  }
+
+  @Test(.timeLimit(.minutes(1)))
+  func everyOtherOperationIsBusyWhileAnInstallRunsAndCancellingItChangesNothing() async throws {
+    let fixture = try await installedFixture()
+    defer { fixture.remove() }
+    let release = try fixture.publish("2.42.0")
+    let other = try fixture.publish("2.43.0")
+    fixture.downloader.answer(release.archive.downloadURL, with: .stallUntilCancelled)
+    let installer = fixture.installer
+    let before = RootSnapshot(fixture.layout.root)
+    #expect(before.entries[".lock"] != nil && before.entries["staging"] == "directory")
+
+    let install = Task {
+      defer { fixture.downloader.stalledContinuation.finish() }
+      return try await installer.install(release)
+    }
+    for await _ in fixture.downloader.stalled { break }
+    await #expect(throws: TartInstallError.busy) { try await installer.install(other) }
+    await #expect(throws: TartInstallError.busy) { try await installer.rollback() }
+    await #expect(throws: TartInstallError.busy) { try await installer.prune() }
+    await #expect(throws: TartInstallError.busy) { try await installer.remove() }
+    install.cancel()
+    await #expect(throws: CancellationError.self) { try await install.value }
+
+    let after = RootSnapshot(fixture.layout.root)
+    #expect(after == before, "the root changed:\n\(after)")
   }
 
   @Test func refusesToStartWhileAnotherProcessHoldsTheLock() async throws {
