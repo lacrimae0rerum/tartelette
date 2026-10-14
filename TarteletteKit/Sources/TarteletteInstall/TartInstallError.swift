@@ -82,8 +82,8 @@ public enum TartInstallError: LocalizedError, Sendable, Equatable {
         + "any. Try again."
     case .inUse(let versions):
       let names = versions.joined(separator: ", ")
-      return "Tart \(names) is still running (a virtual machine or a tart command uses it), so Tartelette "
-        + "left it in place. Stop those virtual machines and commands, then try again."
+      return "Tart \(names) is still in use by a virtual machine or a tart command, so Tartelette can't "
+        + "remove or replace it yet. Stop those virtual machines and commands, then try again."
     }
   }
 
