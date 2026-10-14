@@ -20,8 +20,8 @@ final class AgentAccessStore {
   let paths: AgentPaths
   private(set) var policy: AgentPolicy = .default
   /// Why `agents.json` couldn't be read. Agents are denied everything meanwhile, and nothing is
-  /// saved until the user resets the file.
-  private(set) var loadError: String?
+  /// saved until the user fixes or resets the file.
+  private(set) var loadError: AgentSettingsProblem?
   /// Why the last change couldn't be saved.
   private(set) var saveError: String?
   /// The agent VM registry (`agent-vms.json`) as last read; empty when it can't be read, which
@@ -136,7 +136,8 @@ final class AgentAccessStore {
       if loadError != nil { loadError = nil }
     } catch {
       if policy != .default { policy = .default }
-      loadError = error.localizedDescription
+      let problem = AgentSettingsProblem(error, contents: try? Data(contentsOf: paths.policyFile))
+      if problem != loadError { loadError = problem }
     }
   }
 

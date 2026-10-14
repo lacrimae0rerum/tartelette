@@ -72,7 +72,7 @@ final class AgentAccessStoreTests {
     try damaged.write(to: paths.policyFile)
 
     let store = makeStore()
-    #expect(store.loadError != nil)
+    #expect(store.loadError?.summary == "agents.json isn't valid JSON.")
     #expect(!store.enabled)
     store.setEnabled(true)
     store.setAccess(.operate, for: "dev")
@@ -84,6 +84,15 @@ final class AgentAccessStoreTests {
     #expect(try AgentPolicyStore(file: paths.policyFile).load() == .default)
     store.setAccess(.read, for: "dev")
     #expect(makeStore().access(for: "dev") == .read)
+  }
+
+  @Test func aValueTarteletteDoesntUnderstandIsReportedAsSuch() throws {
+    try FileManager.default.createDirectory(at: paths.applicationSupport, withIntermediateDirectories: true)
+    try Data(#"{"enabled": "yes"}"#.utf8).write(to: paths.policyFile)
+
+    let problem = try #require(makeStore().loadError)
+    #expect(problem.summary == "agents.json has a value Tartelette doesn't understand.")
+    #expect(!problem.details.isEmpty)
   }
 
   // MARK: VMs created by agents
