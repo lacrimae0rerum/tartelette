@@ -1,6 +1,7 @@
 import Foundation
 import TarteletteCLI
 import TarteletteCore
+import TarteletteGuest
 
 /// What `start_vm` reports.
 public struct AgentStartResult: Codable, Sendable, Equatable {
@@ -70,12 +71,21 @@ extension AgentToolbox {
 
   /// `stop_vm` (stop): asks the guest OS to shut down and powers the VM off if it hasn't stopped
   /// after `timeout` seconds (default 60, at most 600). `force` powers it off at once.
+  ///
+  /// A macOS guest is asked from the inside through the guest agent, and gets SIGUSR2 only when
+  /// that request isn't delivered; other guests get SIGUSR2. See `GuestShutdown`.
   public func stopVM(name: String, force: Bool = false, timeout: Int? = nil) async throws -> AgentStopResult {
     try await perform(.stopVM, vm: name) { context in
       guard try authorize(.stop, vm: name, in: context) != nil else { throw AgentToolError.vmNotFound(name) }
       let seconds = Self.seconds(timeout, default: Self.defaultStopTimeoutSeconds, maximum: Self.maxStopTimeoutSeconds)
-      let method = try await stop(name, force: force, timeout: .seconds(seconds))
-      return (AgentStopResult(name: name, state: VMState.stopped.rawValue, method: method), method.rawValue)
+      let (method, request) = try await stop(name, force: force, timeout: .seconds(seconds))
+      let detail =
+        switch request {
+        case .inGuest?: "\(method.rawValue) after an in-guest shutdown request"
+        case .stopRequest?: "\(method.rawValue) after SIGUSR2"
+        case nil: method.rawValue
+        }
+      return (AgentStopResult(name: name, state: VMState.stopped.rawValue, method: method), detail)
     }
   }
 
@@ -106,19 +116,30 @@ extension AgentToolbox {
     return AgentStartResult(name: name, state: VMState.running.rawValue, alreadyRunning: false, guestAgentReady: ready)
   }
 
-  /// Stops a VM the caller has authorized: guest shutdown, then power off; `force` skips the former.
-  func stop(_ name: String, force: Bool, timeout: Duration) async throws -> AgentStopResult.Method {
-    guard isRunning(name) else { return .alreadyStopped }
-    if !force {
-      do {
-        try client.send(.requestGuestShutdown, toVM: name)
-      } catch let error as TartError where error.isVMStateError {
-        return .alreadyStopped  // It stopped in the meantime.
-      }
-      if try await waitUntilStopped(name, timeout: timeout) { return .guestShutdown }
+  /// Stops a VM the caller has authorized: guest shutdown, then power off once `timeout` has passed
+  /// since the shutdown request started; `force` skips the former.
+  ///
+  /// - Returns: How it stopped, and the shutdown request made (nil when none was).
+  func stop(
+    _ name: String, force: Bool, timeout: Duration
+  ) async throws -> (method: AgentStopResult.Method, request: GuestShutdown.Request?) {
+    guard isRunning(name) else { return (.alreadyStopped, nil) }
+    guard !force else {
+      try await powerOff(name)
+      return (.powerOff, nil)
     }
+    let deadline = clock.now() + timeout
+    let request: GuestShutdown.Request
+    do {
+      request = try await GuestShutdown.request(for: operatingSystem(of: name), through: guestTransport(name)) {
+        try client.send(.requestGuestShutdown, toVM: name)
+      }
+    } catch let error as TartError where error.isVMStateError {
+      return (.alreadyStopped, nil)  // It stopped in the meantime.
+    }
+    if try await waitUntilStopped(name, deadline: deadline) { return (.guestShutdown, request) }
     try await powerOff(name)
-    return .powerOff
+    return (.powerOff, request)
   }
 
   /// `tart stop`, which powers the VM off. A VM that stopped on its own is what was asked for.
@@ -137,7 +158,11 @@ extension AgentToolbox {
 
   /// Polls the VM's lock every second; returns whether the VM stopped within `timeout`.
   func waitUntilStopped(_ name: String, timeout: Duration) async throws -> Bool {
-    let deadline = clock.now() + timeout
+    try await waitUntilStopped(name, deadline: clock.now() + timeout)
+  }
+
+  /// Polls the VM's lock every second; returns whether the VM stopped before `deadline`.
+  func waitUntilStopped(_ name: String, deadline: ContinuousClock.Instant) async throws -> Bool {
     while isRunning(name) {
       guard clock.now() < deadline else { return false }
       try await clock.sleep(.seconds(1))
