@@ -83,4 +83,19 @@ struct VMLibraryLogicTests {
     #expect(!VMLibrary.logRecordsLaunch(of: getpid(), in: garbage))
     #expect(!VMLibrary.logRecordsLaunch(of: getpid(), in: none))
   }
+
+  // MARK: Terminal
+
+  @Test func terminalLaunchesPutTheDirectoryOfTheTartTheAppUsesFirstOnPath() {
+    // A managed Tart isn't on the user's PATH, so Terminal must be told where it is.
+    let managed = TartEnvironment(
+      executable: URL(fileURLWithPath: "/Volumes/Data/Tartelette/Tart/current/tart.app/Contents/MacOS/tart"),
+      source: .managed(version: "2.41.0"))
+    let homebrew = TartEnvironment(executable: URL(fileURLWithPath: "/opt/homebrew/bin/tart"), source: .homebrew)
+
+    #expect(
+      VMLibrary.terminalTartDirectory(for: managed)?.path == "/Volumes/Data/Tartelette/Tart/current/tart.app/Contents/MacOS")
+    #expect(VMLibrary.terminalTartDirectory(for: homebrew)?.path == "/opt/homebrew/bin")
+    #expect(VMLibrary.terminalTartDirectory(for: nil) == nil)
+  }
 }

@@ -381,10 +381,17 @@ final class VMLibrary {
     let shell = os(of: name) == .linux ? "bash -l" : "zsh -l"
     let commandLine = "\(context.quotedExecutable) exec -i -t \(ShellQuoting.quote(name)) \(shell)"
     do {
-      try TerminalLauncher.open(commandLine: commandLine, title: name)
+      try TerminalLauncher.open(
+        commandLine: commandLine, title: name, tartDirectory: Self.terminalTartDirectory(for: context.environment))
     } catch {
       navigation.show(error: error, title: "Couldn't open Terminal")
     }
+  }
+
+  /// The directory Terminal puts first on `PATH`, so `tart` there is the Tart the app uses: a copy
+  /// Tartelette manages isn't on the user's `PATH`.
+  nonisolated static func terminalTartDirectory(for environment: TartEnvironment?) -> URL? {
+    environment?.executable.deletingLastPathComponent()
   }
 
   /// Resolves the VM's IP and opens `ssh <user>@<ip>` in Terminal.
@@ -395,7 +402,9 @@ final class VMLibrary {
       let commandLine =
         "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
         + ShellQuoting.quote("\(settings.sshUsername)@\(address)")
-      try TerminalLauncher.open(commandLine: commandLine, title: "\(name) — SSH")
+      try TerminalLauncher.open(
+        commandLine: commandLine, title: "\(name) — SSH",
+        tartDirectory: Self.terminalTartDirectory(for: context.environment))
     } catch {
       navigation.show(error: error, title: "Couldn't connect to “\(name)”")
     }
