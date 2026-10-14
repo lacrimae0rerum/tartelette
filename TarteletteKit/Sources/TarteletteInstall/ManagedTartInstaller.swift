@@ -44,7 +44,7 @@ public struct ManagedTartState: Sendable, Equatable {
   }
 }
 
-/// Installs the copy of Tart that Tartelette manages, in a `ManagedTartLayout`.
+/// Installs, switches and removes the copy of Tart that Tartelette manages, in a `ManagedTartLayout`.
 ///
 /// Every operation either completes or leaves `versions/`, `current` and the manifest exactly as they
 /// were, and empties its scratch space in `staging/`. Only one process changes the layout at a time;
@@ -53,21 +53,24 @@ public struct ManagedTartInstaller: Sendable {
   public let layout: ManagedTartLayout
   private let downloader: any TartDownloading
   private let verifier: any TartSignatureVerifying
+  private let runningExecutables: any RunningExecutablesProviding
   private let processRunner: any ProcessRunning
 
   public init(
     layout: ManagedTartLayout = .standard,
     downloader: any TartDownloading = URLSessionTartDownloader(),
     verifier: any TartSignatureVerifying = CodeSignatureVerifier(),
+    runningExecutables: any RunningExecutablesProviding = ProcessListRunningExecutables(),
     processRunner: any ProcessRunning = ProcessRunner()
   ) {
     self.layout = layout
     self.downloader = downloader
     self.verifier = verifier
+    self.runningExecutables = runningExecutables
     self.processRunner = processRunner
   }
 
-  /// The installed versions, the active one and the one active before it. Reads the disk only.
+  /// The installed versions, the active one and the one `rollback()` would select. Reads the disk only.
   public func state() -> ManagedTartState {
     let installed = installedVersions()
     let current = layout.currentVersion.flatMap { installed.contains($0) ? $0 : nil }
@@ -78,7 +81,7 @@ public struct ManagedTartInstaller: Sendable {
   // MARK: - Install
 
   /// Downloads `release`, verifies it and makes it the active version, keeping the one it replaces
-  /// and recording it in the manifest.
+  /// for `rollback()`. Versions other than those two are then pruned when no process runs them.
   ///
   /// The archive's SHA-256 must match the release's checksums file, it must hold exactly `tart.app`
   /// and its LICENSE, and `tart.app` must pass the signature check and report the release's version.
@@ -100,6 +103,7 @@ public struct ManagedTartInstaller: Sendable {
           progress(TartInstallProgress(phase: .installing, bytesReceived: 0, bytesExpected: expected))
           try verifyBundle(at: layout.versionDirectory(version).appendingPathComponent("tart.app"), is: release.version)
           try select(version)
+          _ = try? pruneUnusedVersions()
         }
         return state()
       }
@@ -132,6 +136,7 @@ public struct ManagedTartInstaller: Sendable {
       progress(TartInstallProgress(phase: .installing, bytesReceived: expected, bytesExpected: expected))
       try Task.checkCancellation()
       try place(unpacked, as: version)
+      _ = try? pruneUnusedVersions()
       return state()
     }
   }
@@ -258,6 +263,77 @@ public struct ManagedTartInstaller: Sendable {
     }
   }
 
+  /// Selects the version that was active before the current one, and remembers the current one so
+  /// a second rollback returns to it.
+  ///
+  /// - Throws: `TartInstallError.noPreviousVersion` when there is none. Nothing changes on failure.
+  @discardableResult
+  public func rollback() async throws -> ManagedTartState {
+    guard FileManager.default.fileExists(atPath: layout.root.path) else { throw TartInstallError.noPreviousVersion }
+    return try await exclusively {
+      guard let previous = state().previous, let version = TartVersion(previous) else {
+        throw TartInstallError.noPreviousVersion
+      }
+      try verifyBundle(at: layout.versionDirectory(previous).appendingPathComponent("tart.app"), is: version)
+      try select(previous)
+      return state()
+    }
+  }
+
+  // MARK: - Prune and remove
+
+  /// Removes installed versions other than the current and the previous one, except those a running
+  /// process executes. Returns the versions removed.
+  @discardableResult
+  public func prune() async throws -> [String] {
+    guard FileManager.default.fileExists(atPath: layout.root.path) else { return [] }
+    return try await exclusively { try pruneUnusedVersions() }
+  }
+
+  private func pruneUnusedVersions() throws -> [String] {
+    let state = state()
+    let keep = Set([state.current, state.previous].compactMap { $0 })
+    let running = runningExecutables.runningExecutablePaths()
+    let unused = state.installed.filter { !keep.contains($0) && !isRunning($0, among: running) }
+    guard !unused.isEmpty else { return [] }
+
+    // Move every version out of `versions/` first, putting them all back if one can't be moved.
+    let trash = try makeWorkDirectory()
+    defer { try? FileManager.default.removeItem(at: trash) }
+    var moved: [String] = []
+    do {
+      for version in unused {
+        try Self.rename(layout.versionDirectory(version), to: trash.appendingPathComponent(version), replacing: false)
+        moved.append(version)
+      }
+    } catch {
+      for version in moved {
+        try? Self.rename(trash.appendingPathComponent(version), to: layout.versionDirectory(version), replacing: false)
+      }
+      throw error
+    }
+    return moved
+  }
+
+  /// Deletes the managed copy: every version, `current`, the manifest and the scratch space.
+  ///
+  /// - Throws: `TartInstallError.inUse` while a running process executes any installed version.
+  ///   Nothing changes on failure.
+  public func remove() async throws {
+    guard FileManager.default.fileExists(atPath: layout.root.path) else { return }
+    try await exclusively {
+      let running = runningExecutables.runningExecutablePaths()
+      let inUse = installedVersions().filter { isRunning($0, among: running) }
+      guard inUse.isEmpty else { throw TartInstallError.inUse(versions: inUse) }
+
+      // One rename takes the whole copy out of use; then the bytes are deleted.
+      let trash = layout.root.deletingLastPathComponent()
+        .appendingPathComponent(".\(layout.root.lastPathComponent)-removing-\(UUID().uuidString)")
+      try Self.rename(layout.root, to: trash, replacing: false)
+      try? FileManager.default.removeItem(at: trash)
+    }
+  }
+
   // MARK: - Layout
 
   /// Installed versions, oldest first: real folders in `versions/` that hold a `tart.app`.
@@ -276,6 +352,18 @@ public struct ManagedTartInstaller: Sendable {
     let directory = layout.versionDirectory(version)
     return (try? Self.fileType(directory)) == .typeDirectory
       && (try? Self.fileType(directory.appendingPathComponent("tart.app"))) == .typeDirectory
+  }
+
+  /// Whether one of `running` is inside `versions/<version>/`, as spelled in the layout or with every
+  /// symbolic link resolved (the kernel reports `/private/var/…` for `/var/…`).
+  private func isRunning(_ version: String, among running: [String]) -> Bool {
+    let directory = layout.versionDirectory(version).path
+    let resolved = realpath(directory, nil).map { pointer in
+      defer { free(pointer) }
+      return String(cString: pointer)
+    }
+    let prefixes = Set([directory, resolved].compactMap { $0 }.map { $0 + "/" })
+    return running.contains { path in prefixes.contains { path.hasPrefix($0) } }
   }
 
   /// A new, empty folder in `staging/`, on the same volume as `versions/` so moves are renames.
