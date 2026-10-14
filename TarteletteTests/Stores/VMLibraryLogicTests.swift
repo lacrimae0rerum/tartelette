@@ -36,6 +36,16 @@ struct VMLibraryLogicTests {
     #expect(VMLibrary.stateChanges(from: [listing("x", .running)], to: [listing("x", .running)]).isEmpty)
   }
 
+  // MARK: Quitting
+
+  @Test func quittingAsksOnlyTheRunningVMsThisAppStarted() {
+    let vms = [
+      listing("mac", .running), listing("ubuntu", .running), listing("off", .stopped), listing("elsewhere", .running),
+    ]
+    #expect(VMLibrary.vmsToShutDownOnQuit(launched: ["ubuntu", "off", "mac", "gone"], vms: vms) == ["mac", "ubuntu"])
+    #expect(VMLibrary.vmsToShutDownOnQuit(launched: [], vms: vms).isEmpty)
+  }
+
   // MARK: Logs
 
   @Test func logTailReturnsTheLastLinesAfterAnOffset() throws {

@@ -158,7 +158,7 @@ uninstalling Tartelette doesn't touch them.
 |------|------------|-----------------|
 | Create | New VM from a Cirrus Labs image, macOS IPSW (latest/file/URL), empty Linux VM, `.tvm` import | `clone`, `create --from-ipsw`, `create --linux`, `import` |
 | Run | Start in a window, headless, with VNC (Screen Sharing or built-in), in Recovery, or with any saved run options | `run` and all its flags |
-| Control | Request shutdown (graceful), power off, suspend, force quit, show the VM window | `SIGUSR2`, `stop`, `suspend` |
+| Control | Request shutdown (graceful: macOS guests are asked through the Tart Guest Agent, with `SIGUSR2` when it doesn't answer; Linux guests get `SIGUSR2`), power off, suspend, force quit, show the VM window | `exec`, `SIGUSR2`, `stop`, `suspend` |
 | Configure | CPU, memory, display (pt/px, refit), grow or replace the disk, new MAC/serial | `set` |
 | Run options | Network (shared, bridged, Softnet allow/block/expose, host-only), shared folders, extra disks (image, cached VM, NBD), root disk caching/sync, Rosetta, nested virtualization, serial console, audio/USB/clipboard/input devices, first-boot provisioning | `run --net-* --dir --disk --root-disk-opts --rosetta --nested --serial …` |
 | Access | IP address (DHCP, ARP or guest agent), Terminal shell in the guest, SSH, one-shot console | `ip`, `exec -it`, `exec` |
