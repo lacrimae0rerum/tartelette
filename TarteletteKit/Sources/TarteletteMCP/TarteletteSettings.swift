@@ -42,9 +42,17 @@ public struct TarteletteSettings: Sendable, Equatable {
 
   /// A toolbox for the Tart these settings point to, recording `clientName` in the audit log.
   ///
+  /// The Tart is found as the app finds it: the chosen path, then the copy Tartelette manages, then
+  /// the other installs.
+  ///
+  /// - Parameter managedTartLayout: Where Tartelette keeps the Tart it manages.
   /// - Throws: `AgentToolError.tartNotFound` when no `tart` executable can be found.
-  public func makeToolbox(clientName: String?) throws -> AgentToolbox {
-    guard var environment = TartEnvironment.detect(preferredExecutablePath: tartExecutablePath, tartHome: tartHome)
+  public func makeToolbox(
+    clientName: String?, managedTartLayout: ManagedTartLayout = .standard
+  ) throws -> AgentToolbox {
+    guard
+      var environment = TartEnvironment.detect(
+        preferredExecutablePath: tartExecutablePath, tartHome: tartHome, managedLayout: managedTartLayout)
     else { throw AgentToolError.tartNotFound }
     environment.extraVariables = tartVariables
     return AgentToolbox(client: TartClient(environment: environment), clientName: clientName)
