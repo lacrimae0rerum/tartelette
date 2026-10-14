@@ -19,12 +19,35 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   file sizes, number of agent VMs), and every call is logged to
   `~/Library/Logs/Tartelette/agents.log` and shown in Settings, never with command input or file
   contents.
+- **Tart installed by Tartelette**: **Install Tart** on the "Tart Isn't Installed" screen
+  downloads the latest official Tart release from GitHub (about 23 MB), checks its SHA-256 against
+  the release's checksums file and that `tart.app` is signed by Tart's developer (Cirrus Labs,
+  team `9M2P8L4D89`) and unmodified, and keeps it in `~/Library/Application Support/Tartelette/Tart`,
+  with progress and Cancel. It doesn't need Homebrew, so it also works on macOS 14. Any failure
+  installs nothing and leaves the previous state as it was. Homebrew stays fully supported.
+- **Tart updates, only when you ask**: **Check for Updates** in **Settings › General › Tart** looks
+  up the latest Tart release. The managed copy updates with **Update to X** (running VMs keep their
+  version; new commands use the new one), goes back with **Go Back to X** and can be removed with
+  **Remove Managed Copy…**, which leaves VMs and images alone. A Homebrew Tart keeps being used:
+  the check shows `brew upgrade openai/tools/tart` and offers **Install Managed Copy**. Settings
+  also shows the line that puts the managed Tart on your own `PATH` and links Tart's FSL-1.1-ALv2
+  license. `tartelette-mcp` uses the same Tart as the app, including the managed copy.
 
 ### Changed
 
 - **Build output**: `make` now builds into `build.noindex/` instead of `build/`. Spotlight
   doesn't index folders ending in `.noindex`, so local builds no longer appear as extra copies
   of Tartelette in app search. `make clean` also removes the old `build/` folder.
+- **Privacy**: Tartelette now connects to GitHub, but only when you press **Check for Updates**,
+  **Install** or **Update**. There's still no telemetry, analytics or automatic update check.
+
+### Fixed
+
+- **Terminal with the app's Tart**: **Open Terminal** and **Open SSH Session** put the directory of
+  the Tart the app uses first on `PATH`, so `tart` in that window is the same Tart as the app's,
+  even a copy that isn't on your `PATH`.
+- **Softnet hints**: the messages shown when Softnet is missing now say
+  `brew install openai/tools/softnet` instead of `brew install cirruslabs/cli/softnet`.
 
 ## [1.0.0] - 2026-10-09
 
