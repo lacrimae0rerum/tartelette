@@ -2,6 +2,7 @@ import Foundation
 import Testing
 
 @testable import TarteletteAgents
+@testable import TarteletteCLI
 @testable import TarteletteMCP
 
 @Suite("Tartelette settings for the MCP helper")
@@ -62,5 +63,25 @@ struct TarteletteSettingsTests {
     #expect(toolbox.client.environment.paths.home.path == home.path)
     #expect(toolbox.client.environment.extraVariables == ["TART_NO_AUTO_PRUNE": "1"])
     #expect(toolbox.clientName == "test-agent")
+  }
+
+  @Test func followsTheTartManagedByTartelette() throws {
+    let directory = try TemporaryDirectory()
+    defer { directory.remove() }
+    let managed = directory.url.appendingPathComponent("Managed", isDirectory: true)
+    let tart = managed.appendingPathComponent("versions/2.41.0/tart.app/Contents/MacOS/tart")
+    try FileManager.default.createDirectory(at: tart.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try Data("#!/bin/sh\n".utf8).write(to: tart)
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: tart.path)
+    try FileManager.default.createSymbolicLink(
+      atPath: managed.appendingPathComponent("current").path, withDestinationPath: "versions/2.41.0")
+
+    let toolbox = try TarteletteSettings().makeToolbox(
+      clientName: nil, managedTartLayout: ManagedTartLayout(root: managed))
+
+    #expect(
+      toolbox.client.environment.executable.path
+        == managed.appendingPathComponent("current/tart.app/Contents/MacOS/tart").path)
+    #expect(toolbox.client.environment.source == .managed(version: "2.41.0"))
   }
 }
