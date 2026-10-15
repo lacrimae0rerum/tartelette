@@ -12,6 +12,9 @@ let package = Package(
     // Linked by the app project's `tartelette-mcp` tool target, which embeds the helper in the app.
     .library(name: "TarteletteMCP", targets: ["TarteletteMCP"]),
     .executable(name: "tartelette-mcp", targets: ["TarteletteMCPServer"]),
+    // Linked only by the app: the network code that finds, downloads and verifies Tart releases.
+    // The MCP helper never links it, so it never touches the network.
+    .library(name: "TarteletteInstall", targets: ["TarteletteInstall"]),
   ],
   dependencies: [
     .package(url: "https://github.com/modelcontextprotocol/swift-sdk.git", from: "0.12.1"),
@@ -38,6 +41,9 @@ let package = Package(
     .executableTarget(name: "TarteletteMCPServer", dependencies: [
       "TarteletteMCP", .product(name: "MCP", package: "swift-sdk"),
     ]),
+    // Managed Tart: release feed, versions and checksums. The only module with network code; not
+    // part of the umbrella module.
+    .target(name: "TarteletteInstall"),
     // Umbrella module imported by the app.
     .target(name: "TarteletteKit", dependencies: [
       "TarteletteCore", "TarteletteCLI", "TarteletteMetrics", "TarteletteGuest", "TarteletteAgents",
@@ -47,6 +53,7 @@ let package = Package(
     .testTarget(name: "TarteletteMetricsTests", dependencies: ["TarteletteMetrics"]),
     .testTarget(name: "TarteletteGuestTests", dependencies: ["TarteletteGuest"]),
     .testTarget(name: "TarteletteAgentsTests", dependencies: ["TarteletteAgents"]),
+    .testTarget(name: "TarteletteInstallTests", dependencies: ["TarteletteInstall"]),
     .testTarget(name: "TarteletteMCPTests", dependencies: [
       "TarteletteMCP", "TarteletteAgents", .product(name: "MCP", package: "swift-sdk"),
       .product(name: "Logging", package: "swift-log"),
