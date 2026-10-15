@@ -233,6 +233,26 @@ final class TartInstallationStoreTests {
     #expect(store.operation == nil)
   }
 
+  @Test func theDownloadReportsHowMuchArrived() async throws {
+    let downloading = Gate()
+    let verifying = Gate()
+    installer.steps = [
+      (TartInstallProgress(phase: .downloading, bytesReceived: 9_200_000, bytesExpected: 23_000_000), downloading),
+      (TartInstallProgress(phase: .verifying, bytesReceived: 23_000_000, bytesExpected: 23_000_000), verifying),
+    ]
+    let store = makeStore()
+    #expect(store.downloaded == nil)
+
+    let install = try #require(store.installLatest())
+    #expect(await until { store.downloaded == TartDownloadAmount(received: 9_200_000, expected: 23_000_000) })
+    downloading.open()
+    #expect(await until { store.downloaded == nil })
+    verifying.open()
+    await install.value
+
+    #expect(store.downloaded == nil)
+  }
+
   @Test func rollingBackAndRemovingShowWhileTheyRun() async throws {
     installer.current = ManagedTartState(current: "2.41.0", previous: "2.40.1", installed: ["2.40.1", "2.41.0"])
     let store = makeStore()
