@@ -85,6 +85,50 @@ struct ManagedTartVersionsTests {
     #expect(fixture.stagingIsEmpty)
   }
 
+  static let listingFailure = TartInstallError.runningProcessesUnknown(reason: "proc_listpids: not permitted")
+
+  @Test func pruneKeepsEveryVersionWhenProcessesCantBeListed() async throws {
+    let fixture = try InstallerFixture()
+    defer { fixture.remove() }
+    try await fixture.installer.install(try fixture.publish("2.40.0"))
+    fixture.running.set([fixture.realPath("versions/2.40.0/tart.app/Contents/MacOS/tart")])
+    try await fixture.installer.install(try fixture.publish("2.41.0"))
+    try await fixture.installer.install(try fixture.publish("2.42.0"))
+    fixture.running.fail(with: Self.listingFailure)
+    let before = LayoutSnapshot(fixture.layout.root)
+
+    await #expect(throws: Self.listingFailure) { try await fixture.installer.prune() }
+    #expect(LayoutSnapshot(fixture.layout.root) == before)
+    #expect(fixture.installer.state().installed == ["2.40.0", "2.41.0", "2.42.0"])
+  }
+
+  @Test func installingKeepsEveryVersionWhenProcessesCantBeListed() async throws {
+    let fixture = try InstallerFixture()
+    defer { fixture.remove() }
+    try await fixture.installer.install(try fixture.publish("2.40.0"))
+    try await fixture.installer.install(try fixture.publish("2.41.0"))
+    fixture.running.fail(with: Self.listingFailure)
+
+    let state = try await fixture.installer.install(try fixture.publish("2.42.0"))
+
+    #expect(
+      state == ManagedTartState(current: "2.42.0", previous: "2.41.0", installed: ["2.40.0", "2.41.0", "2.42.0"]))
+  }
+
+  @Test func refusesToReplaceABrokenVersionWhenProcessesCantBeListed() async throws {
+    let fixture = try InstallerFixture()
+    defer { fixture.remove() }
+    let release = try fixture.publish("2.42.0")
+    try await fixture.installer.install(release)
+    fixture.verifier.reject(
+      appsIn: fixture.managed("versions/2.42.0"), with: .signatureRejected(signer: "ad-hoc", reason: "modified"))
+    fixture.running.fail(with: Self.listingFailure)
+    let before = LayoutSnapshot(fixture.layout.root)
+
+    await #expect(throws: Self.listingFailure) { try await fixture.installer.install(release) }
+    #expect(LayoutSnapshot(fixture.layout.root) == before)
+  }
+
   // MARK: - Rolling back
 
   @Test func rollbackSelectsThePreviousVersionAndRemembersTheOneItLeft() async throws {
@@ -126,6 +170,17 @@ struct ManagedTartVersionsTests {
     #expect(!FileManager.default.fileExists(atPath: fixture.managed("").path))
     #expect(fixture.installer.state() == ManagedTartState())
     #expect(TartEnvironment.detect(managedLayout: fixture.layout)?.source != .managed(version: "2.42.0"))
+  }
+
+  @Test func removeChangesNothingWhenProcessesCantBeListed() async throws {
+    let fixture = try InstallerFixture()
+    defer { fixture.remove() }
+    try await fixture.installer.install(try fixture.publish("2.42.0"))
+    fixture.running.fail(with: Self.listingFailure)
+    let before = LayoutSnapshot(fixture.layout.root)
+
+    await #expect(throws: Self.listingFailure) { try await fixture.installer.remove() }
+    #expect(LayoutSnapshot(fixture.layout.root) == before)
   }
 
   @Test func removeRefusesWhileAProcessRunsAnyVersion() async throws {

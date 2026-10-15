@@ -15,6 +15,8 @@ enum ArchiveContents: Sendable, CustomStringConvertible {
   case withoutApp
   /// `tart.app`, `LICENSE` and a `README`.
   case withExtraEntry
+  /// `LICENSE` is a symbolic link into `tart.app`.
+  case licenseIsSymlink
   /// Bytes that aren't a gzipped tar archive.
   case notAnArchive
 
@@ -25,6 +27,7 @@ enum ArchiveContents: Sendable, CustomStringConvertible {
     case .withoutLicense: "no LICENSE"
     case .withoutApp: "no tart.app"
     case .withExtraEntry: "an extra README"
+    case .licenseIsSymlink: "LICENSE is a symlink"
     case .notAnArchive: "not an archive"
     }
   }
@@ -74,31 +77,44 @@ final class StubDownloader: TartDownloading, @unchecked Sendable {
   }
 }
 
-/// A signature check that accepts or rejects every bundle, and records what it checked.
+/// A signature check that accepts or rejects every bundle, or the bundles in one folder, and records
+/// what it checked.
 final class FakeVerifier: TartSignatureVerifying, @unchecked Sendable {
   private let lock = NSLock()
   private var rejection: TartInstallError?
+  private var rejectedFolders: [String: TartInstallError] = [:]
   private var checked: [URL] = []
 
   func reject(with error: TartInstallError?) { lock.withLock { rejection = error } }
+  /// Rejects every bundle inside `folder`, such as an installed `versions/<version>`.
+  func reject(appsIn folder: URL, with error: TartInstallError) {
+    lock.withLock { rejectedFolders[folder.path + "/"] = error }
+  }
   var checkedApps: [URL] { lock.withLock { checked } }
 
   func verify(appAt url: URL) throws {
     let rejection = lock.withLock {
       checked.append(url)
-      return self.rejection
+      return rejectedFolders.first { url.path.hasPrefix($0.key) }?.value ?? self.rejection
     }
     if let rejection { throw rejection }
   }
 }
 
-/// A fixed list of running executables.
+/// A fixed list of running executables, or a failure to list them.
 final class FakeRunningExecutables: RunningExecutablesProviding, @unchecked Sendable {
   private let lock = NSLock()
   private var paths: [String] = []
+  private var failure: (any Error)?
 
   func set(_ paths: [String]) { lock.withLock { self.paths = paths } }
-  func runningExecutablePaths() -> [String] { lock.withLock { paths } }
+  func fail(with error: (any Error)?) { lock.withLock { failure = error } }
+
+  func runningExecutablePaths() throws -> [String] {
+    let (paths, failure) = lock.withLock { (self.paths, self.failure) }
+    if let failure { throw failure }
+    return paths
+  }
 }
 
 /// A scratch managed layout, fake releases and the installer's test doubles.
@@ -189,7 +205,7 @@ struct InstallerFixture {
     let tart = macOS.appendingPathComponent("tart")
     try executable(version).write(to: tart)
     try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: tart.path)
-    try license.write(to: payload.appendingPathComponent("LICENSE"))
+    if contents != .licenseIsSymlink { try license.write(to: payload.appendingPathComponent("LICENSE")) }
 
     var entries = ["tart.app", "LICENSE"]
     switch contents {
@@ -201,6 +217,9 @@ struct InstallerFixture {
     case .withExtraEntry:
       try Data("read me".utf8).write(to: payload.appendingPathComponent("README"))
       entries.append("README")
+    case .licenseIsSymlink:
+      try fileManager.createSymbolicLink(
+        atPath: payload.appendingPathComponent("LICENSE").path, withDestinationPath: "tart.app/Contents/Info.plist")
     case .standard, .notAnArchive: break
     }
 

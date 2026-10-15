@@ -28,7 +28,7 @@ struct ProcessListRunningExecutablesTests {
   /// Polls until `provider` lists `path`, for up to five seconds.
   func waitUntilListed(_ path: String, by provider: some RunningExecutablesProviding) async throws -> Bool {
     for _ in 0..<50 {
-      if provider.runningExecutablePaths().contains(path) { return true }
+      if try provider.runningExecutablePaths().contains(path) { return true }
       try await Task.sleep(for: .milliseconds(100))
     }
     return false

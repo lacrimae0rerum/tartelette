@@ -111,6 +111,117 @@ struct ManagedTartInstallerTests {
     #expect(fixture.downloader.calls.count == downloads)
   }
 
+  @Test(arguments: [
+    (ArchiveContents.withExtraEntry, ["LICENSE", "tart.app"]), (.withoutLicense, ["tart.app"]),
+    (.licenseIsSymlink, ["tart.app"]),
+  ])
+  func installsOnlyTartAppAndARegularLicense(_ contents: ArchiveContents, installed: [String]) async throws {
+    let fixture = try InstallerFixture()
+    defer { fixture.remove() }
+
+    try await fixture.installer.install(try fixture.publish("2.42.0", contents: contents))
+
+    let entries = try FileManager.default.contentsOfDirectory(atPath: fixture.managed("versions/2.42.0").path)
+    #expect(entries.sorted() == installed)
+    #expect(fixture.currentDestination == "versions/2.42.0")
+    #expect(fixture.stagingIsEmpty)
+  }
+
+  // MARK: - Replacing a broken installed version
+
+  static let rejection = TartInstallError.signatureRejected(signer: "ad-hoc", reason: "modified")
+
+  @Test func replacesAnInstalledFolderWithoutTartApp() async throws {
+    let fixture = try await installedFixture()
+    defer { fixture.remove() }
+    let broken = fixture.managed("versions/2.42.0")
+    try FileManager.default.createDirectory(at: broken, withIntermediateDirectories: true)
+    try Data("left over".utf8).write(to: broken.appendingPathComponent("junk"))
+
+    let state = try await fixture.installer.install(try fixture.publish("2.42.0"))
+
+    #expect(state == ManagedTartState(current: "2.42.0", previous: "2.41.0", installed: ["2.41.0", "2.42.0"]))
+    #expect(try FileManager.default.contentsOfDirectory(atPath: broken.path).sorted() == ["LICENSE", "tart.app"])
+    #expect(
+      try Data(contentsOf: fixture.managed("current/tart.app/Contents/MacOS/tart"))
+        == InstallerFixture.executable("2.42.0"))
+    #expect(fixture.stagingIsEmpty)
+  }
+
+  @Test func reinstallingTheCurrentVersionDownloadsItAgainWhenItFailsVerification() async throws {
+    let fixture = try InstallerFixture()
+    defer { fixture.remove() }
+    let release = try fixture.publish("2.42.0")
+    try await fixture.installer.install(release)
+    let marker = fixture.managed("versions/2.42.0/tampered")
+    try Data("tampered".utf8).write(to: marker)
+    fixture.verifier.reject(appsIn: fixture.managed("versions/2.42.0"), with: Self.rejection)
+    let downloads = fixture.downloader.calls.count
+
+    let state = try await fixture.installer.install(release)
+
+    #expect(fixture.downloader.calls.count == downloads + 2)
+    #expect(state == ManagedTartState(current: "2.42.0", previous: nil, installed: ["2.42.0"]))
+    #expect(!FileManager.default.fileExists(atPath: marker.path))
+    #expect(fixture.stagingIsEmpty)
+  }
+
+  @Test func reinstallingAnOlderVersionDownloadsItAgainWhenItFailsVerification() async throws {
+    let fixture = try InstallerFixture()
+    defer { fixture.remove() }
+    let older = try fixture.publish("2.41.0")
+    try await fixture.installer.install(older)
+    try await fixture.installer.install(try fixture.publish("2.42.0"))
+    fixture.verifier.reject(appsIn: fixture.managed("versions/2.41.0"), with: Self.rejection)
+    let downloads = fixture.downloader.calls.count
+
+    let state = try await fixture.installer.install(older)
+
+    #expect(fixture.downloader.calls.count == downloads + 2)
+    #expect(state == ManagedTartState(current: "2.41.0", previous: "2.42.0", installed: ["2.41.0", "2.42.0"]))
+    #expect(fixture.currentDestination == "versions/2.41.0")
+  }
+
+  @Test func refusesToReplaceABrokenVersionAProcessRuns() async throws {
+    let fixture = try InstallerFixture()
+    defer { fixture.remove() }
+    let older = try fixture.publish("2.41.0")
+    try await fixture.installer.install(older)
+    try await fixture.installer.install(try fixture.publish("2.42.0"))
+    fixture.verifier.reject(appsIn: fixture.managed("versions/2.41.0"), with: Self.rejection)
+    fixture.running.set([fixture.realPath("versions/2.41.0/tart.app/Contents/MacOS/tart")])
+    let before = LayoutSnapshot(fixture.layout.root)
+    let downloads = fixture.downloader.calls.count
+
+    await #expect(throws: TartInstallError.inUse(versions: ["2.41.0"])) { try await fixture.installer.install(older) }
+
+    #expect(LayoutSnapshot(fixture.layout.root) == before)
+    #expect(fixture.downloader.calls.count == downloads)
+    #expect(fixture.stagingIsEmpty)
+  }
+
+  @Test func putsABrokenVersionBackWhenTheReplacementCantBeSelected() async throws {
+    let fixture = try await installedFixture()
+    defer { fixture.remove() }
+    let broken = fixture.managed("versions/2.42.0")
+    try FileManager.default.createDirectory(at: broken, withIntermediateDirectories: true)
+    try Data("left over".utf8).write(to: broken.appendingPathComponent("junk"))
+    // A folder where the link should be can't be replaced by renaming a link over it.
+    try FileManager.default.removeItem(at: fixture.managed("current"))
+    try FileManager.default.createDirectory(at: fixture.managed("current/keep"), withIntermediateDirectories: true)
+    let before = LayoutSnapshot(fixture.layout.root)
+
+    let error = await #expect(throws: TartInstallError.self) {
+      try await fixture.installer.install(try fixture.publish("2.42.0"))
+    }
+    guard case .fileSystem = error else {
+      Issue.record("Expected a file system failure, got \(String(describing: error))")
+      return
+    }
+    #expect(LayoutSnapshot(fixture.layout.root) == before)
+    #expect(fixture.stagingIsEmpty)
+  }
+
   @Test func cleansStagingLeftByAnEarlierCrash() async throws {
     let fixture = try InstallerFixture()
     defer { fixture.remove() }
@@ -203,7 +314,7 @@ struct ManagedTartInstallerTests {
     }
   }
 
-  @Test(arguments: [ArchiveContents.appIsSymlink, .withoutLicense, .withoutApp, .withExtraEntry])
+  @Test(arguments: [ArchiveContents.appIsSymlink, .withoutApp])
   func refusesAnArchiveWithUnexpectedContents(_ contents: ArchiveContents) async throws {
     let fixture = try await installedFixture()
     defer { fixture.remove() }
