@@ -139,7 +139,10 @@ struct URLSessionTartDownloaderTests {
     #expect(!FileManager.default.fileExists(atPath: destination.path))
   }
 
-  @Test func cancellingStopsTheDownloadAndKeepsNothing() async throws {
+  /// Bounded, so a download that never reports progress fails the test instead of hanging it, and
+  /// the scratch folder is still removed.
+  @Test(.timeLimit(.minutes(1)))
+  func cancellingStopsTheDownloadAndKeepsNothing() async throws {
     let scratch = try ScratchDirectory("download")
     defer { scratch.remove() }
     let url = StubURLProtocol.uniqueURL("tart.tar.gz")

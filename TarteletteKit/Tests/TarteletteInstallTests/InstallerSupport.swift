@@ -239,16 +239,15 @@ struct InstallerFixture {
 
 extension ArchiveContents: Equatable {}
 
-/// Everything under the managed root except scratch space and the lock: `versions/`, `current` and
-/// the manifest, compared byte for byte.
-struct LayoutSnapshot: Equatable, CustomStringConvertible {
+/// Everything under the managed root, compared byte for byte: `versions/`, `current`, the manifest,
+/// the lock file and `staging/` with whatever is in it. Links are recorded, never followed.
+struct RootSnapshot: Equatable, CustomStringConvertible {
   var entries: [String: String] = [:]
 
   init(_ root: URL) {
     let fileManager = FileManager.default
     guard let walker = fileManager.enumerator(atPath: root.path) else { return }
     for case let path as String in walker {
-      if path == ".lock" || path == "staging" || path.hasPrefix("staging/") { continue }
       let url = root.appendingPathComponent(path)
       let type = (try? fileManager.attributesOfItem(atPath: url.path))?[.type] as? FileAttributeType
       switch type {

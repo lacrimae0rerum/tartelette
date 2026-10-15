@@ -73,14 +73,14 @@ struct ManagedTartVersionsTests {
     // A folder without write permission can't be moved out of `versions/`; 2.39.0 moves first.
     try FileManager.default.setAttributes(
       [.posixPermissions: 0o555], ofItemAtPath: fixture.managed("versions/2.40.0").path)
-    let before = LayoutSnapshot(fixture.layout.root)
+    let before = RootSnapshot(fixture.layout.root)
 
     let error = await #expect(throws: TartInstallError.self) { try await fixture.installer.prune() }
     guard case .fileSystem = error else {
       Issue.record("Expected a file system failure, got \(String(describing: error))")
       return
     }
-    #expect(LayoutSnapshot(fixture.layout.root) == before)
+    #expect(RootSnapshot(fixture.layout.root) == before)
     #expect(fixture.installer.state().installed == ["2.39.0", "2.40.0", "2.41.0", "2.42.0"])
     #expect(fixture.stagingIsEmpty)
   }
@@ -95,10 +95,10 @@ struct ManagedTartVersionsTests {
     try await fixture.installer.install(try fixture.publish("2.41.0"))
     try await fixture.installer.install(try fixture.publish("2.42.0"))
     fixture.running.fail(with: Self.listingFailure)
-    let before = LayoutSnapshot(fixture.layout.root)
+    let before = RootSnapshot(fixture.layout.root)
 
     await #expect(throws: Self.listingFailure) { try await fixture.installer.prune() }
-    #expect(LayoutSnapshot(fixture.layout.root) == before)
+    #expect(RootSnapshot(fixture.layout.root) == before)
     #expect(fixture.installer.state().installed == ["2.40.0", "2.41.0", "2.42.0"])
   }
 
@@ -123,10 +123,10 @@ struct ManagedTartVersionsTests {
     fixture.verifier.reject(
       appsIn: fixture.managed("versions/2.42.0"), with: .signatureRejected(signer: "ad-hoc", reason: "modified"))
     fixture.running.fail(with: Self.listingFailure)
-    let before = LayoutSnapshot(fixture.layout.root)
+    let before = RootSnapshot(fixture.layout.root)
 
     await #expect(throws: Self.listingFailure) { try await fixture.installer.install(release) }
-    #expect(LayoutSnapshot(fixture.layout.root) == before)
+    #expect(RootSnapshot(fixture.layout.root) == before)
   }
 
   // MARK: - Rolling back
@@ -150,10 +150,10 @@ struct ManagedTartVersionsTests {
     let fixture = try InstallerFixture()
     defer { fixture.remove() }
     try await fixture.installer.install(try fixture.publish("2.42.0"))
-    let before = LayoutSnapshot(fixture.layout.root)
+    let before = RootSnapshot(fixture.layout.root)
 
     await #expect(throws: TartInstallError.noPreviousVersion) { try await fixture.installer.rollback() }
-    #expect(LayoutSnapshot(fixture.layout.root) == before)
+    #expect(RootSnapshot(fixture.layout.root) == before)
   }
 
   // MARK: - Removing
@@ -177,10 +177,10 @@ struct ManagedTartVersionsTests {
     defer { fixture.remove() }
     try await fixture.installer.install(try fixture.publish("2.42.0"))
     fixture.running.fail(with: Self.listingFailure)
-    let before = LayoutSnapshot(fixture.layout.root)
+    let before = RootSnapshot(fixture.layout.root)
 
     await #expect(throws: Self.listingFailure) { try await fixture.installer.remove() }
-    #expect(LayoutSnapshot(fixture.layout.root) == before)
+    #expect(RootSnapshot(fixture.layout.root) == before)
   }
 
   /// Leaves a copy like the one `remove()` renames aside, holding `version`.
@@ -243,12 +243,12 @@ struct ManagedTartVersionsTests {
     try await fixture.installer.install(try fixture.publish("2.41.0"))
     try await fixture.installer.install(try fixture.publish("2.42.0"))
     fixture.running.set([fixture.realPath("versions/2.41.0/tart.app/Contents/MacOS/tart")])
-    let before = LayoutSnapshot(fixture.layout.root)
+    let before = RootSnapshot(fixture.layout.root)
 
     let error = await #expect(throws: TartInstallError.self) { try await fixture.installer.remove() }
     #expect(error == .inUse(versions: ["2.41.0"]))
     #expect(error?.errorDescription?.contains("Stop those virtual machines") == true)
-    #expect(LayoutSnapshot(fixture.layout.root) == before)
+    #expect(RootSnapshot(fixture.layout.root) == before)
   }
 
   // MARK: - Links inside the managed folder are never followed

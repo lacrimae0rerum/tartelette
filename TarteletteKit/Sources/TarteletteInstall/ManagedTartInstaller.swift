@@ -147,9 +147,13 @@ public struct ManagedTartInstaller: Sendable {
     }
   }
 
-  /// Accepts a little more than the announced size, never an unbounded download.
+  /// A quarter and 1 MiB more than the announced size, so a download that grows far beyond it stops.
+  /// Saturates at `Int64.max` instead of overflowing; a negative size counts as zero.
   static func downloadLimit(_ announcedSize: Int64) -> Int64 {
-    announcedSize + announcedSize / 4 + 1_048_576
+    let size = max(0, announcedSize)
+    let (withMargin, overflowed) = size.addingReportingOverflow(size / 4)
+    let (limit, overflowedAgain) = withMargin.addingReportingOverflow(1_048_576)
+    return overflowed || overflowedAgain ? .max : limit
   }
 
   static func sha256(of file: URL) throws -> String {
