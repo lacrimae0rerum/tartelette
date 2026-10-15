@@ -109,7 +109,7 @@ private struct DetailRouter: View {
   }
 }
 
-/// Window toolbar: New, Start/Stop for the selected VM, Refresh.
+/// Window toolbar: New, Start/Stop for the selected VM, Refresh, Settings.
 private struct MainToolbar: ToolbarContent {
   @Environment(AppModel.self) private var model
 
@@ -164,6 +164,15 @@ private struct MainToolbar: ToolbarContent {
         Label("Refresh", systemImage: "arrow.clockwise")
       }
       .help("Refresh")
+    }
+
+    ToolbarItem(placement: .primaryAction) {
+      Button {
+        model.navigation.openSettings()
+      } label: {
+        Label("Settings", systemImage: "gearshape")
+      }
+      .help("Settings (⌘,)")
     }
   }
 }
