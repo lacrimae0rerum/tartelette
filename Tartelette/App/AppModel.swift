@@ -1,13 +1,15 @@
 import AppKit
 import Foundation
 import Observation
+import TarteletteInstall
 import TarteletteKit
 
 /// The composition root: owns every store and wires them together.
 ///
 /// Views get it with `@Environment(AppModel.self) private var model` and use the stores:
 /// `model.library`, `model.jobs`, `model.metrics`, `model.clipboard`, `model.profiles`,
-/// `model.registries`, `model.agents`, `model.settings`, `model.navigation`, `model.context`.
+/// `model.registries`, `model.agents`, `model.installation`, `model.settings`, `model.navigation`,
+/// `model.context`.
 @Observable
 final class AppModel {
   let settings: AppSettings
@@ -20,6 +22,7 @@ final class AppModel {
   let metrics: MetricsCenter
   let registries: RegistryStore
   let agents: AgentAccessStore
+  let installation: TartInstallationStore
 
   /// Called when anything shown in the Dock (badge, progress) may have changed.
   var onDockStateChange: () -> Void = {}
@@ -27,8 +30,16 @@ final class AppModel {
   private(set) var started = false
   private var reconnectTask: Task<Void, Never>?
 
-  init() {
-    let settings = AppSettings()
+  /// - Parameters:
+  ///   - releaseFeed: Where Tart releases are looked up, only when the user asks.
+  ///   - installer: Installs the Tart that Tartelette manages.
+  init(
+    settings: AppSettings = AppSettings(),
+    releaseFeed: any TartReleaseFeed = GitHubTartReleaseFeed(userAgent: AppModel.userAgent),
+    installer: any ManagedTartInstalling = ManagedTartInstaller(
+      layout: .standard, downloader: URLSessionTartDownloader(userAgent: AppModel.userAgent),
+      verifier: CodeSignatureVerifier(), runningExecutables: ProcessListRunningExecutables())
+  ) {
     let navigation = NavigationModel()
     let context = TartContext()
     let profiles = RunProfileStore(defaultEngine: { settings.defaultClipboardEngine })
@@ -50,6 +61,9 @@ final class AppModel {
     self.metrics = metrics
     self.registries = RegistryStore(jobs: jobs, settings: settings)
     self.agents = agents
+    self.installation = TartInstallationStore(
+      settings: settings, releaseFeed: releaseFeed, installer: installer,
+      activeTart: { ActiveTart(environment: context.environment, versionText: context.version) })
 
     context.reload(settings: settings)
     library.onChange.append { [weak clipboard, weak metrics] changes in
@@ -58,6 +72,14 @@ final class AppModel {
     }
     library.onChange.append { [weak self] _ in self?.onDockStateChange() }
     jobs.onChange = { [weak self] in self?.onDockStateChange() }
+    // A new, restored or removed managed Tart: new commands use whichever Tart is detected now.
+    installation.onTartChange = { [weak self] in self?.reloadEnvironment() }
+  }
+
+  /// Identifies Tartelette to GitHub, which requires a User-Agent: `Tartelette/1.1.0`.
+  nonisolated static var userAgent: String {
+    let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+    return "Tartelette/\(version ?? "unknown")"
   }
 
   /// Starts polling and sampling. Safe to call more than once.

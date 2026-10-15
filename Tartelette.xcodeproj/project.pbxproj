@@ -11,6 +11,7 @@
 		7A1E00000000000000000043 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A1E00000000000000000040 /* main.swift */; };
 		7A1E00000000000000000044 /* TarteletteMCP in Frameworks */ = {isa = PBXBuildFile; productRef = 7A1E00000000000000000046 /* TarteletteMCP */; };
 		7A1E00000000000000000045 /* tartelette-mcp in Embed Helper Tool */ = {isa = PBXBuildFile; fileRef = 7A1E00000000000000000041 /* tartelette-mcp */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
+		7A1E00000000000000000051 /* TarteletteInstall in Frameworks */ = {isa = PBXBuildFile; productRef = 7A1E00000000000000000052 /* TarteletteInstall */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -72,6 +73,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				7A1E00000000000000000001 /* TarteletteKit in Frameworks */,
+				7A1E00000000000000000051 /* TarteletteInstall in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -155,6 +157,7 @@
 			name = Tartelette;
 			packageProductDependencies = (
 				7A1E00000000000000000020 /* TarteletteKit */,
+				7A1E00000000000000000052 /* TarteletteInstall */,
 			);
 			productName = Tartelette;
 			productReference = 7A1E00000000000000000002 /* Tartelette.app */;
@@ -566,6 +569,10 @@
 		7A1E00000000000000000046 /* TarteletteMCP */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = TarteletteMCP;
+		};
+		7A1E00000000000000000052 /* TarteletteInstall */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = TarteletteInstall;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

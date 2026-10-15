@@ -15,6 +15,8 @@ nonisolated enum Links {
   /// Needed on macOS 14: the Homebrew formula depends on Softnet, which requires macOS 15.
   static let archiveInstallCommand =
     "curl -fL https://github.com/openai/tart/releases/latest/download/tart.tar.gz | tar -xz -C /Applications"
+  /// Updates a Tart installed with Homebrew, which Tartelette doesn't update itself.
+  static let homebrewUpgradeCommand = "brew upgrade openai/tools/tart"
 
   static var canInstallTartWithHomebrew: Bool {
     ProcessInfo.processInfo.isOperatingSystemAtLeast(OperatingSystemVersion(majorVersion: 15, minorVersion: 0, patchVersion: 0))
