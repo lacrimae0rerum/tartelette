@@ -16,8 +16,8 @@ vigila máquinas virtuales de Tart sin abrir la terminal, con métricas de rendi
 un portapapeles que funciona de verdad en los dos sentidos (texto, texto enriquecido, imágenes y
 archivos).
 
-Tartelette usa el ejecutable `tart` que ya tienes instalado, así que todo lo que hace es
-exactamente lo que hace la línea de comandos. Cada hoja muestra el comando `tart …` equivalente,
+Tartelette usa el ejecutable `tart` que ya tienes instalado (o el que instala ella misma si se lo
+pides), así que todo lo que hace es exactamente lo que hace la línea de comandos. Cada hoja muestra el comando `tart …` equivalente,
 listo para copiar.
 
 ![El panel de Tartelette: la bienvenida con las imágenes listas para descargar y las métricas de este Mac en vivo](docs/screenshots/dashboard-welcome.png)
@@ -27,7 +27,7 @@ listo para copiar.
 | | Requisito | Detalles |
 |---|---|---|
 | **Mac** | Apple silicon (M1 o posterior) | Los Mac con Intel no son compatibles: Tart solo funciona en Apple silicon y la app se distribuye solo para `arm64` (en un Mac con Intel, macOS indica que no es compatible con ese tipo de Mac). |
-| **macOS** | macOS 14 Sonoma o posterior | Probado en macOS 26.7 (Tahoe) y en macOS 14.8 (Sonoma). En macOS 14, Tart se instala desde su descarga oficial y no con Homebrew (ver [Instala Tart](#1-instala-tart)), y la red Softnet no está disponible. |
+| **macOS** | macOS 14 Sonoma o posterior | Probado en macOS 26.7 (Tahoe) y en macOS 14.8 (Sonoma). En macOS 14, Tart no se puede instalar con Homebrew: instálalo desde Tartelette o desde su descarga oficial (ver [Instala Tart](#1-instala-tart)), y la red Softnet no está disponible. |
 | **Tart** | 2.27 o posterior | El puente de portapapeles, la consola y las métricas del invitado usan `tart exec`, que llegó en Tart 2.27.0. Probado con Tart 2.40.1. |
 | **Máquinas virtuales** | macOS y Linux (`arm64`) | Apple permite como máximo dos VM de macOS en marcha a la vez. |
 | **Dentro de la VM** | Tart Guest Agent | Necesario para el portapapeles, la consola, las métricas del invitado y las herramientas de los [agentes de IA](#agentes-de-ia-mcp). Viene preinstalado en las imágenes de Cirrus Labs `*-base`, `*-xcode` y Linux. En macOS, el portapapeles necesita además una sesión de usuario iniciada; en Linux, un escritorio con `wl-clipboard` o `xclip`/`xsel`. |
@@ -37,7 +37,16 @@ listo para copiar.
 
 ### 1. Instala Tart
 
-**macOS 15 o posterior**, con [Homebrew](https://brew.sh):
+**Lo más sencillo es dejar que Tartelette lo instale.** Si no tienes Tart, sigue con los pasos 2
+y 3: al abrir Tartelette verás **Tart Isn't Installed** con el botón **Install Tart**. Tartelette
+descarga la versión oficial de Tart desde GitHub (unos 23 MB), comprueba su SHA-256 y que está
+firmada por el desarrollador de Tart (Cirrus Labs, equipo `9M2P8L4D89`), y la guarda sin
+modificarla en `~/Library/Application Support/Tartelette/Tart`. No necesita Homebrew, así que
+también sirve en macOS 14: instala la misma descarga oficial que la vía manual. Si algo falla, no
+instala nada. Para actualizarlo, consulta
+[Mantener Tart al día](#mantener-tart-al-día).
+
+**Con [Homebrew](https://brew.sh)** (macOS 15 o posterior):
 
 ```bash
 brew trust --formula openai/tools/tart openai/tools/softnet
@@ -49,15 +58,24 @@ antes de instalarlas, y Tart depende de Softnet, que está en el mismo repositor
 `brew install openai/tools/tart` la instalación se detiene con «Refusing to load formula
 openai/tools/softnet from untrusted tap».
 
-**macOS 14 Sonoma**: la fórmula de Homebrew no se puede instalar (Softnet necesita macOS 15), así
-que instala Tart desde su descarga oficial:
+Si ya tienes Tart de Homebrew, Tartelette lo sigue usando, y **Check for Updates** te muestra
+`brew upgrade openai/tools/tart` cuando hay una versión nueva.
+
+**A mano en macOS 14 Sonoma**: la fórmula de Homebrew no se puede instalar (Softnet necesita
+macOS 15). Si prefieres no usar la instalación de Tartelette, instala Tart desde su descarga
+oficial:
 
 ```bash
 curl -fL https://github.com/openai/tart/releases/latest/download/tart.tar.gz | tar -xz -C /Applications
 ```
 
-Tartelette lo encuentra en `/Applications/tart.app`. Si no tienes Tart, la propia app te muestra
-el comando adecuado para tu versión de macOS, con un botón para ejecutarlo en Terminal.
+Tartelette lo encuentra en `/Applications/tart.app`. La pantalla **Tart Isn't Installed** también
+muestra la alternativa para tu versión de macOS (Homebrew o la descarga oficial), con un botón
+para ejecutarla en Terminal.
+
+**Softnet** (para la red `--net-softnet`) no lo gestiona Tartelette: con Homebrew se instala junto
+a Tart; si usas la copia de Tartelette, instálalo con `brew install openai/tools/softnet` (macOS 15
+o posterior).
 
 ### 2. Descarga e instala Tartelette
 
@@ -134,11 +152,48 @@ una copia nueva sin Developer ID, macOS vuelve a pedir el [paso del primer arran
 y, si guardaste contraseñas en Tartelette, puede pedirte una vez permiso para que la nueva versión
 las lea del llavero.
 
+### Mantener Tart al día
+
+Tartelette nunca busca versiones nuevas por su cuenta: pulsa **Check for Updates** en
+**Settings › General › Tart** cuando quieras comprobarlo (si no lo pulsas, no sabrás que hay una
+versión nueva). Actualizar Tart no requiere una versión nueva de Tartelette. Lo que te ofrece
+depende de dónde viene el Tart que usa, según la fila **Source**:
+
+| Source | Qué ofrece si hay una versión nueva |
+|--------|-------------------------------------|
+| **Managed by Tartelette** | **Update to X**: descarga y verifica la versión nueva y la instala junto a la anterior. Las VM en marcha siguen con la versión con la que arrancaron; los comandos nuevos usan la nueva. |
+| **Homebrew** | El comando `brew upgrade openai/tools/tart`, con un botón para ejecutarlo en Terminal, o **Install Managed Copy** (**Use Managed Copy** si ya la tienes) para que Tartelette pase a usar su propia copia. |
+| **Other** o **Chosen in Settings** | **Install Tart X**: instala la copia gestionada y pasa a usarla. |
+
+Cuando Tartelette gestiona una copia, **Settings › General** muestra también la sección
+**Managed Copy**:
+
+- **Go Back to X** vuelve a la versión anterior, que Tartelette conserva. Las más antiguas solo
+  las borra cuando ningún proceso las usa.
+- **Remove Managed Copy…** borra la copia gestionada. Tus VM e imágenes no se tocan, y Tartelette
+  pasa a usar otro Tart instalado, si lo hay. No se puede mientras una VM o un comando `tart` la
+  esté usando.
+- Para usar esa copia en tu propia terminal (por ejemplo, para pegar los comandos `tart …` que
+  muestran las hojas), la sección muestra la línea que la pone primero en el `PATH`. Ejecútala o
+  añádela a `~/.zshrc`:
+
+  ```bash
+  export PATH="$HOME/Library/Application Support/Tartelette/Tart/current/tart.app/Contents/MacOS:$PATH"
+  ```
+
+  Tartelette no necesita esa línea: **Open Terminal** y **Open SSH Session** ya ponen el Tart de
+  la app primero en el `PATH` de la ventana que abren, y `tartelette-mcp` (ver
+  [Agentes de IA](#agentes-de-ia-mcp)) usa el mismo Tart que la app.
+
+El Tart que descarga Tartelette se distribuye con su propia licencia,
+[FSL-1.1-ALv2](https://github.com/openai/tart/blob/main/LICENSE).
+
 ### Desinstalar
 
 1. Si activaste **Open at login** (en **Settings › General**), desactívalo.
 2. Cierra Tartelette y mueve `/Applications/Tartelette.app` a la papelera.
-3. Opcional, para borrar también sus datos:
+3. Opcional, para borrar también sus datos (incluida la copia de Tart que gestiona Tartelette, si
+   la instalaste):
 
    ```bash
    rm -rf ~/Library/Application\ Support/Tartelette ~/Library/Caches/Tartelette ~/Library/Logs/Tartelette
@@ -375,10 +430,12 @@ respondió en unos 5 segundos), ejecutar comandos, escribir y leer archivos, y a
 
 ## Privacidad
 
-- **No se conecta a internet por su cuenta.** La app no contiene código de red: no hay
-  telemetría, analítica ni comprobación de actualizaciones. El tráfico de red lo genera `tart`
-  (al descargar, subir o iniciar sesión en registros), `ssh` hacia tus VM cuando usas ese
-  respaldo, y los enlaces que abres en el navegador.
+- **Solo se conecta a internet cuando se lo pides.** Tartelette solo se conecta a GitHub
+  (`api.github.com` y la descarga de la versión de Tart) cuando pulsas **Check for Updates**,
+  **Install** o **Update**. No hay telemetría, analítica ni comprobaciones automáticas de
+  actualizaciones. El resto del tráfico de red lo genera `tart` (al descargar, subir o iniciar
+  sesión en registros), `ssh` hacia tus VM cuando usas ese respaldo, y los enlaces que abres en
+  el navegador.
 - **El portapapeles no sale de tu Mac.** Va entre el Mac y tus VM locales mediante `tart exec`
   (o SSH). Las transferencias se preparan en `~/Library/Caches/Tartelette/Clipboard`.
 - **Contraseñas.** La contraseña de **Registries › Log In** se le pasa a `tart login
@@ -447,6 +504,7 @@ TarteletteKit/              paquete Swift; solo el servidor MCP tiene dependenci
   TarteletteCLI             adaptador: ejecuta tart, transmite el progreso, arranca VM, llavero, Softnet
   TarteletteMetrics         adaptador: métricas del Mac y de cada VM, uso del almacenamiento
   TarteletteGuest           adaptador: transportes tart exec/SSH, puente de portapapeles, métricas del invitado
+  TarteletteInstall         adaptador: busca, descarga, verifica e instala el Tart que gestiona la app (solo la app)
   TarteletteAgents          acceso de los agentes: permisos por VM, VM que crean, autorización, registro, herramientas
   TarteletteMCP             servidor MCP: expone las herramientas de los agentes (SDK de MCP para Swift)
   TarteletteMCPServer       el ejecutable tartelette-mcp, que los agentes lanzan por stdio
@@ -469,9 +527,12 @@ Tools/BrandKit              icono Liquid Glass de la app e iconos de la barra de
 | El agente de IA dice que el servidor `tartelette-mcp` no ha podido arrancar | En una copia descargada con el navegador, macOS lo bloquea por la marca de cuarentena: quítala de todo el paquete con `xattr -dr com.apple.quarantine /Applications/Tartelette.app`. Si has movido Tartelette, vuelve a configurarlo en el agente (ver [Agentes de IA](#agentes-de-ia-mcp)). |
 | macOS indica que la app no es compatible con este tipo de Mac | Es un Mac con Intel. Tart y Tartelette solo funcionan en Apple silicon. |
 | macOS pregunta cada vez que copias algo, o no llega nada del Mac a la VM | Permite Tartelette en **Ajustes del Sistema › Privacidad y seguridad › Pegar desde otras apps** (el botón **Open Settings…** de la pestaña **Clipboard & Files** lleva ahí). |
-| «Tart isn't installed» | Instala Tart (ver [Instala Tart](#1-instala-tart)) o elige su ejecutable con **Locate tart…** o en **Settings › General**. |
+| «Tart isn't installed» | Pulsa **Install Tart** (ver [Instala Tart](#1-instala-tart)) o elige su ejecutable con **Locate tart…** o en **Settings › General**. |
 | `brew install openai/tools/tart` dice «Refusing to load formula … from untrusted tap» | Homebrew 6 o posterior: ejecuta antes `brew trust --formula openai/tools/tart openai/tools/softnet`. |
-| Homebrew dice «softnet: This formula does not run on macOS versions older than Sequoia» | Estás en macOS 14: instala Tart desde su [descarga oficial](#1-instala-tart). |
+| Homebrew dice «softnet: This formula does not run on macOS versions older than Sequoia» | Estás en macOS 14: deja que Tartelette instale Tart o instálalo desde su [descarga oficial](#1-instala-tart). |
+| «This copy of Tart failed the signature check…» | Tartelette no usa esa copia y no ha cambiado nada: Tart tiene que estar firmado por su desarrollador, Cirrus Labs (equipo `9M2P8L4D89`), y sin modificar. Vuelve a intentarlo más tarde; instalar Tart de nuevo también sustituye una copia dañada. |
+| «Tartelette couldn't reach GitHub…», «…couldn't download Tart from GitHub» o «GitHub limits how often…» | No hay conexión o se ha alcanzado el límite de consultas de GitHub sin cuenta. No se ha instalado nada: comprueba la conexión y vuelve a intentarlo (si es el límite, cuando indique el mensaje). |
+| «Tartelette is already installing or changing Tart…» | Hay otra operación de Tartelette con Tart en marcha (instalar, actualizar, volver atrás o quitar la copia). Espera a que termine y vuelve a intentarlo. |
 | El portapapeles dice que el agente del invitado no está disponible | Usa una imagen `*-base`/`*-xcode` o instala `tart-guest-agent` en el invitado, y comprueba que hay una sesión de usuario iniciada. |
 | El agente de IA dice que el agente del invitado de la VM no responde | Las herramientas de los agentes llegan al invitado solo mediante el Tart Guest Agent (no por SSH): usa una imagen de Cirrus Labs o instala `tart-guest-agent` en el invitado. Si la VM acaba de arrancar, espera unos segundos (`start_vm` puede esperar a que responda). |
 | La red Softnet falla | **Settings › Registries & Network › Allow Softnet to Run…** (pide la contraseña de administrador una vez). |
@@ -484,4 +545,6 @@ Tools/BrandKit              icono Liquid Glass de la app e iconos de la barra de
 ## Licencia
 
 Tartelette se distribuye con la [licencia MIT](LICENSE). Tart es un proyecto independiente con su
-propia licencia; Tartelette no contiene código de Tart y usa el `tart` que tengas instalado.
+propia licencia, [FSL-1.1-ALv2](https://github.com/openai/tart/blob/main/LICENSE); Tartelette no
+contiene código de Tart y usa el `tart` que tengas instalado o el que descarga de GitHub cuando se
+lo pides.
