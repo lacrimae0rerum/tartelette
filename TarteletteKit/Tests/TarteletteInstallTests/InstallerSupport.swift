@@ -92,12 +92,22 @@ final class FakeVerifier: TartSignatureVerifying, @unchecked Sendable {
   }
 }
 
+/// A fixed list of running executables.
+final class FakeRunningExecutables: RunningExecutablesProviding, @unchecked Sendable {
+  private let lock = NSLock()
+  private var paths: [String] = []
+
+  func set(_ paths: [String]) { lock.withLock { self.paths = paths } }
+  func runningExecutablePaths() -> [String] { lock.withLock { paths } }
+}
+
 /// A scratch managed layout, fake releases and the installer's test doubles.
 struct InstallerFixture {
   let scratch: ScratchDirectory
   let layout: ManagedTartLayout
   let downloader = StubDownloader()
   let verifier = FakeVerifier()
+  let running = FakeRunningExecutables()
 
   init() throws {
     scratch = try ScratchDirectory("installer")
@@ -105,11 +115,19 @@ struct InstallerFixture {
   }
 
   var installer: ManagedTartInstaller {
-    ManagedTartInstaller(layout: layout, downloader: downloader, verifier: verifier)
+    ManagedTartInstaller(layout: layout, downloader: downloader, verifier: verifier, runningExecutables: running)
   }
 
   /// Paths inside the managed root, spelled independently of `ManagedTartLayout`.
   func managed(_ path: String) -> URL { scratch.appending("Managed/\(path)") }
+
+  /// The path the kernel reports for a process executing `path`: every symbolic link resolved,
+  /// including `/var` → `/private/var`.
+  func realPath(_ path: String) -> String {
+    guard let resolved = realpath(managed(path).path, nil) else { return managed(path).path }
+    defer { free(resolved) }
+    return String(cString: resolved)
+  }
 
   /// Where `current` points, as written in the link.
   var currentDestination: String? {
