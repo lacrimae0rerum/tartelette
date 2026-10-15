@@ -1,0 +1,360 @@
+import CryptoKit
+import Darwin
+import Foundation
+import TarteletteCLI
+import TarteletteCore
+
+/// Where an installation is, for a progress bar.
+public struct TartInstallProgress: Sendable, Equatable {
+  public enum Phase: Sendable, Equatable {
+    /// Downloading the release archive.
+    case downloading
+    /// Checking the archive's checksum, unpacking it and checking `tart.app`'s signature.
+    case verifying
+    /// Moving the verified version into place and selecting it.
+    case installing
+  }
+
+  public var phase: Phase
+  /// Bytes of the archive received so far.
+  public var bytesReceived: Int64
+  /// The archive's size as the release announces it.
+  public var bytesExpected: Int64
+
+  public init(phase: Phase, bytesReceived: Int64, bytesExpected: Int64) {
+    self.phase = phase
+    self.bytesReceived = bytesReceived
+    self.bytesExpected = bytesExpected
+  }
+}
+
+/// The versions of Tart that Tartelette manages.
+public struct ManagedTartState: Sendable, Equatable {
+  /// The active version, which `current` selects.
+  public var current: String?
+  /// The version that was active before `current`, when it is still installed.
+  public var previous: String?
+  /// Every installed version, oldest first.
+  public var installed: [String]
+
+  public init(current: String? = nil, previous: String? = nil, installed: [String] = []) {
+    self.current = current
+    self.previous = previous
+    self.installed = installed
+  }
+}
+
+/// Installs the copy of Tart that Tartelette manages, in a `ManagedTartLayout`.
+///
+/// Every operation either completes or leaves `versions/`, `current` and the manifest exactly as they
+/// were, and empties its scratch space in `staging/`. Only one process changes the layout at a time;
+/// another one gets `TartInstallError.busy`.
+public struct ManagedTartInstaller: Sendable {
+  public let layout: ManagedTartLayout
+  private let downloader: any TartDownloading
+  private let verifier: any TartSignatureVerifying
+  private let processRunner: any ProcessRunning
+
+  public init(
+    layout: ManagedTartLayout = .standard,
+    downloader: any TartDownloading = URLSessionTartDownloader(),
+    verifier: any TartSignatureVerifying = CodeSignatureVerifier(),
+    processRunner: any ProcessRunning = ProcessRunner()
+  ) {
+    self.layout = layout
+    self.downloader = downloader
+    self.verifier = verifier
+    self.processRunner = processRunner
+  }
+
+  /// The installed versions, the active one and the one active before it. Reads the disk only.
+  public func state() -> ManagedTartState {
+    let installed = installedVersions()
+    let current = layout.currentVersion.flatMap { installed.contains($0) ? $0 : nil }
+    let previous = readManifest().previousVersion.flatMap { installed.contains($0) && $0 != current ? $0 : nil }
+    return ManagedTartState(current: current, previous: previous, installed: installed)
+  }
+
+  // MARK: - Install
+
+  /// Downloads `release`, verifies it and makes it the active version, keeping the one it replaces
+  /// and recording it in the manifest.
+  ///
+  /// The archive's SHA-256 must match the release's checksums file, it must hold exactly `tart.app`
+  /// and its LICENSE, and `tart.app` must pass the signature check and report the release's version.
+  /// A version that is already installed is selected without downloading anything.
+  ///
+  /// - Throws: `TartInstallError`, `TartReleaseError` for a damaged checksums file, or
+  ///   `CancellationError`. Nothing changes on failure.
+  @discardableResult
+  public func install(
+    _ release: TartRelease, progress: @escaping @Sendable (TartInstallProgress) -> Void = { _ in }
+  ) async throws -> ManagedTartState {
+    try await exclusively {
+      try cleanStaging()
+      let version = release.version.description
+      let expected = release.archive.size
+
+      if isInstalled(version) {
+        if layout.currentVersion != version {
+          progress(TartInstallProgress(phase: .installing, bytesReceived: 0, bytesExpected: expected))
+          try verifyBundle(at: layout.versionDirectory(version).appendingPathComponent("tart.app"), is: release.version)
+          try select(version)
+        }
+        return state()
+      }
+
+      let work = try makeWorkDirectory()
+      defer { try? FileManager.default.removeItem(at: work) }
+
+      let checksumsFile = work.appendingPathComponent("checksums.txt")
+      try await downloader.download(
+        from: release.checksums.downloadURL, to: checksumsFile, limit: Self.downloadLimit(release.checksums.size),
+        progress: { _ in })
+      let checksums = try TartChecksums(parsing: String(decoding: try Data(contentsOf: checksumsFile), as: UTF8.self))
+      let expectedSHA256 = try checksums.expectedSHA256(for: release.archive.name)
+
+      let archive = work.appendingPathComponent("tart.tar.gz")
+      progress(TartInstallProgress(phase: .downloading, bytesReceived: 0, bytesExpected: expected))
+      try await downloader.download(
+        from: release.archive.downloadURL, to: archive, limit: Self.downloadLimit(expected),
+        progress: { progress(TartInstallProgress(phase: .downloading, bytesReceived: $0, bytesExpected: expected)) })
+
+      progress(TartInstallProgress(phase: .verifying, bytesReceived: expected, bytesExpected: expected))
+      guard try Self.sha256(of: archive) == expectedSHA256 else {
+        throw TartInstallError.checksumMismatch(fileName: release.archive.name)
+      }
+      let unpacked = work.appendingPathComponent("unpacked", isDirectory: true)
+      try await extract(archive, into: unpacked)
+      try Task.checkCancellation()
+      try verifyBundle(at: unpacked.appendingPathComponent("tart.app"), is: release.version)
+
+      progress(TartInstallProgress(phase: .installing, bytesReceived: expected, bytesExpected: expected))
+      try Task.checkCancellation()
+      try place(unpacked, as: version)
+      return state()
+    }
+  }
+
+  /// Accepts a little more than the announced size, never an unbounded download.
+  static func downloadLimit(_ announcedSize: Int64) -> Int64 {
+    announcedSize + announcedSize / 4 + 1_048_576
+  }
+
+  static func sha256(of file: URL) throws -> String {
+    let handle = try FileHandle(forReadingFrom: file)
+    defer { try? handle.close() }
+    var hasher = SHA256()
+    while let chunk = try handle.read(upToCount: 1 << 20), !chunk.isEmpty {
+      hasher.update(data: chunk)
+    }
+    return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+  }
+
+  /// Unpacks `archive` with `/usr/bin/tar` and checks it holds exactly a `tart.app` folder and a
+  /// LICENSE file. tar refuses absolute paths, `..` and writing through links by default.
+  private func extract(_ archive: URL, into directory: URL) async throws {
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+    let output: CommandOutput
+    do {
+      output = try await processRunner.run(
+        ProcessRequest(
+          executable: URL(fileURLWithPath: "/usr/bin/tar"), arguments: ["-xzf", archive.path, "-C", directory.path],
+          timeout: .seconds(300)))
+    } catch ProcessRunError.cancelled {
+      throw CancellationError()
+    } catch {
+      throw TartInstallError.extractionFailed(reason: error.localizedDescription)
+    }
+    guard output.succeeded else {
+      if output.diagnostic.contains("No space left on device") { throw TartInstallError.diskFull }
+      throw TartInstallError.extractionFailed(reason: output.diagnostic)
+    }
+
+    let entries = try FileManager.default.contentsOfDirectory(atPath: directory.path).sorted()
+    guard entries == ["LICENSE", "tart.app"] else {
+      throw TartInstallError.unexpectedArchive(reason: "It contains: \(entries.joined(separator: ", ")).")
+    }
+    guard try Self.fileType(directory.appendingPathComponent("tart.app")) == .typeDirectory else {
+      throw TartInstallError.unexpectedArchive(reason: "tart.app isn't a folder.")
+    }
+    guard try Self.fileType(directory.appendingPathComponent("LICENSE")) == .typeRegular else {
+      throw TartInstallError.unexpectedArchive(reason: "LICENSE isn't a regular file.")
+    }
+  }
+
+  /// The type of the item at `url` itself, without following a symbolic link.
+  private static func fileType(_ url: URL) throws -> FileAttributeType? {
+    try FileManager.default.attributesOfItem(atPath: url.path)[.type] as? FileAttributeType
+  }
+
+  /// The signature check, then the version `tart.app` reports (read after the check, from the
+  /// sealed Info.plist).
+  private func verifyBundle(at app: URL, is version: TartVersion) throws {
+    guard try Self.fileType(app) == .typeDirectory else {
+      throw TartInstallError.unexpectedArchive(reason: "tart.app isn't a folder.")
+    }
+    try verifier.verify(appAt: app)
+    let info = NSDictionary(contentsOf: app.appendingPathComponent("Contents/Info.plist"))
+    let found = info?["CFBundleShortVersionString"] as? String
+    guard let found, TartVersion(found) == version else {
+      throw TartInstallError.versionMismatch(expected: version.description, found: found ?? "unknown")
+    }
+  }
+
+  /// Moves the verified version into `versions/` and selects it, undoing the move if selecting fails.
+  private func place(_ unpacked: URL, as version: String) throws {
+    let fileManager = FileManager.default
+    let versions = layout.versionsDirectory
+    let createdVersions = !fileManager.fileExists(atPath: versions.path)
+    if createdVersions { try fileManager.createDirectory(at: versions, withIntermediateDirectories: false) }
+    let destination = layout.versionDirectory(version)
+    do {
+      try Self.rename(unpacked, to: destination, replacing: false)
+    } catch {
+      if createdVersions { try? fileManager.removeItem(at: versions) }
+      throw error
+    }
+    do {
+      try select(version)
+    } catch {
+      try? Self.rename(destination, to: unpacked, replacing: false)
+      if createdVersions { try? fileManager.removeItem(at: versions) }
+      throw error
+    }
+  }
+
+  // MARK: - Switch
+
+  /// Points `current` at `versions/<version>` and records the version it pointed at before.
+  ///
+  /// The manifest is written first, so a crash between the two steps leaves a manifest naming the
+  /// still-current version, which is harmless. If switching fails the manifest is restored.
+  private func select(_ version: String) throws {
+    let fileManager = FileManager.default
+    let manifestBefore = try? Data(contentsOf: layout.manifestFile)
+    if let leaving = layout.currentVersion, leaving != version {
+      try writeManifest(Manifest(previousVersion: leaving))
+    }
+    do {
+      // A new relative link renamed over `current`: atomic, and running processes keep their binary.
+      // It is made in `staging/`, so a crash before the rename leaves nothing outside scratch space.
+      try fileManager.createDirectory(at: layout.stagingDirectory, withIntermediateDirectories: true)
+      let link = layout.stagingDirectory.appendingPathComponent("current-\(UUID().uuidString)")
+      try fileManager.createSymbolicLink(atPath: link.path, withDestinationPath: "versions/\(version)")
+      do {
+        try Self.rename(link, to: layout.currentLink, replacing: true)
+      } catch {
+        try? fileManager.removeItem(at: link)
+        throw error
+      }
+    } catch {
+      if let manifestBefore {
+        try? manifestBefore.write(to: layout.manifestFile, options: .atomic)
+      } else {
+        try? fileManager.removeItem(at: layout.manifestFile)
+      }
+      throw error
+    }
+  }
+
+  // MARK: - Layout
+
+  /// Installed versions, oldest first: real folders in `versions/` that hold a `tart.app`.
+  private func installedVersions() -> [String] {
+    let names = (try? FileManager.default.contentsOfDirectory(atPath: layout.versionsDirectory.path)) ?? []
+    return names.filter(isInstalled).sorted { lhs, rhs in
+      switch (TartVersion(lhs), TartVersion(rhs)) {
+      case let (left?, right?) where left != right: left < right
+      default: lhs < rhs
+      }
+    }
+  }
+
+  private func isInstalled(_ version: String) -> Bool {
+    guard !version.hasPrefix(".") else { return false }
+    let directory = layout.versionDirectory(version)
+    return (try? Self.fileType(directory)) == .typeDirectory
+      && (try? Self.fileType(directory.appendingPathComponent("tart.app"))) == .typeDirectory
+  }
+
+  /// A new, empty folder in `staging/`, on the same volume as `versions/` so moves are renames.
+  private func makeWorkDirectory() throws -> URL {
+    let directory = layout.stagingDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    return directory
+  }
+
+  /// Deletes whatever an interrupted operation left in `staging/`. Safe under the lock: no other
+  /// operation is running.
+  private func cleanStaging() throws {
+    let staging = layout.stagingDirectory
+    for item in (try? FileManager.default.contentsOfDirectory(atPath: staging.path)) ?? [] {
+      try FileManager.default.removeItem(at: staging.appendingPathComponent(item))
+    }
+  }
+
+  /// `rename(2)`: atomic on one volume. Without `replacing`, fails rather than replace what's there.
+  private static func rename(_ source: URL, to destination: URL, replacing: Bool) throws {
+    let result =
+      replacing
+      ? Darwin.rename(source.path, destination.path)
+      : renamex_np(source.path, destination.path, UInt32(RENAME_EXCL))
+    guard result == 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+  }
+
+  // MARK: - Manifest
+
+  /// What the installer remembers between operations.
+  struct Manifest: Codable, Equatable {
+    /// The version that was active before the current one.
+    var previousVersion: String?
+  }
+
+  private func readManifest() -> Manifest {
+    guard let data = try? Data(contentsOf: layout.manifestFile),
+      let manifest = try? JSONDecoder().decode(Manifest.self, from: data)
+    else { return Manifest() }
+    return manifest
+  }
+
+  private func writeManifest(_ manifest: Manifest) throws {
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+    // Written to a temporary file and renamed into place.
+    try encoder.encode(manifest).write(to: layout.manifestFile, options: .atomic)
+  }
+
+  // MARK: - Exclusion and errors
+
+  /// Runs `body` while holding the layout's lock, mapping every failure to an actionable error.
+  /// Another process holding the lock makes it throw `TartInstallError.busy` at once.
+  private func exclusively<T>(_ body: () async throws -> T) async throws -> T {
+    let descriptor: Int32
+    do {
+      try FileManager.default.createDirectory(at: layout.root, withIntermediateDirectories: true)
+      descriptor = open(layout.lockFile.path, O_RDWR | O_CREAT | O_CLOEXEC, 0o644)
+      guard descriptor >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+    } catch {
+      throw TartInstallError.fileSystem(error)
+    }
+    defer { close(descriptor) }
+    guard flock(descriptor, LOCK_EX | LOCK_NB) == 0 else {
+      if errno == EWOULDBLOCK { throw TartInstallError.busy }
+      throw TartInstallError.fileSystem(POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO))
+    }
+    defer { flock(descriptor, LOCK_UN) }
+
+    do {
+      return try await body()
+    } catch let error as TartInstallError {
+      throw error
+    } catch let error as TartReleaseError {
+      throw error
+    } catch is CancellationError {
+      throw CancellationError()
+    } catch {
+      throw TartInstallError.fileSystem(error)
+    }
+  }
+}
