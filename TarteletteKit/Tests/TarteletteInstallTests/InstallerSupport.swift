@@ -106,14 +106,17 @@ final class FakeRunningExecutables: RunningExecutablesProviding, @unchecked Send
   private let lock = NSLock()
   private var paths: [String] = []
   private var failure: (any Error)?
+  private var compute: (@Sendable () -> [String])?
 
   func set(_ paths: [String]) { lock.withLock { self.paths = paths } }
   func fail(with error: (any Error)?) { lock.withLock { failure = error } }
+  /// Lists whatever `compute` returns at the moment of each call.
+  func set(computing compute: @escaping @Sendable () -> [String]) { lock.withLock { self.compute = compute } }
 
   func runningExecutablePaths() throws -> [String] {
-    let (paths, failure) = lock.withLock { (self.paths, self.failure) }
+    let (paths, failure, compute) = lock.withLock { (self.paths, self.failure, self.compute) }
     if let failure { throw failure }
-    return paths
+    return compute?() ?? paths
   }
 }
 

@@ -96,7 +96,8 @@ public struct ManagedTartInstaller: Sendable {
   public func install(
     _ release: TartRelease, progress: @escaping @Sendable (TartInstallProgress) -> Void = { _ in }
   ) async throws -> ManagedTartState {
-    try await exclusively {
+    sweepRemovedCopies()
+    return try await exclusively {
       try cleanStaging()
       let version = release.version.description
       let expected = release.archive.size
@@ -226,8 +227,12 @@ public struct ManagedTartInstaller: Sendable {
   private func place(_ payload: URL, as version: String, setAsideIn work: URL) throws {
     let fileManager = FileManager.default
     let versions = layout.versionsDirectory
-    let createdVersions = !fileManager.fileExists(atPath: versions.path)
-    if createdVersions { try fileManager.createDirectory(at: versions, withIntermediateDirectories: false) }
+    let createdVersions = !Self.itemExists(versions)
+    if createdVersions {
+      try fileManager.createDirectory(at: versions, withIntermediateDirectories: false)
+    } else if try Self.fileType(versions) != .typeDirectory {
+      throw TartInstallError.fileSystem(reason: "\(versions.path) isn't a folder.")
+    }
     let destination = layout.versionDirectory(version)
     var replaced: URL?
     func undo() {
@@ -290,8 +295,7 @@ public struct ManagedTartInstaller: Sendable {
     do {
       // A new relative link renamed over `current`: atomic, and running processes keep their binary.
       // It is made in `staging/`, so a crash before the rename leaves nothing outside scratch space.
-      try fileManager.createDirectory(at: layout.stagingDirectory, withIntermediateDirectories: true)
-      let link = layout.stagingDirectory.appendingPathComponent("current-\(UUID().uuidString)")
+      let link = try prepareStaging().appendingPathComponent("current-\(UUID().uuidString)")
       try fileManager.createSymbolicLink(atPath: link.path, withDestinationPath: "versions/\(version)")
       do {
         try Self.rename(link, to: layout.currentLink, replacing: true)
@@ -315,6 +319,7 @@ public struct ManagedTartInstaller: Sendable {
   /// - Throws: `TartInstallError.noPreviousVersion` when there is none. Nothing changes on failure.
   @discardableResult
   public func rollback() async throws -> ManagedTartState {
+    sweepRemovedCopies()
     guard FileManager.default.fileExists(atPath: layout.root.path) else { throw TartInstallError.noPreviousVersion }
     return try await exclusively {
       guard let previous = state().previous, let version = TartVersion(previous) else {
@@ -335,6 +340,7 @@ public struct ManagedTartInstaller: Sendable {
   ///   processes can't be listed.
   @discardableResult
   public func prune() async throws -> [String] {
+    sweepRemovedCopies()
     guard FileManager.default.fileExists(atPath: layout.root.path) else { return [] }
     return try await exclusively { try pruneUnusedVersions() }
   }
@@ -366,28 +372,62 @@ public struct ManagedTartInstaller: Sendable {
 
   /// Deletes the managed copy: every version, `current`, the manifest and the scratch space.
   ///
+  /// One rename takes the whole copy out of use, as a hidden `.<root>-removing-<id>` folder next to
+  /// the root, and then that folder is deleted. If it can't be deleted completely, `remove()` still
+  /// succeeds and the next operation deletes what is left, unless a process started running from it
+  /// in the meantime: then it throws `TartInstallError.inUse`.
+  ///
   /// - Throws: `TartInstallError.inUse` while a running process executes any installed version, and
-  ///   `TartInstallError.runningProcessesUnknown` when the processes can't be listed. Nothing changes
-  ///   on failure.
+  ///   `TartInstallError.runningProcessesUnknown` when the processes can't be listed. Before the
+  ///   rename, nothing changes on failure.
   public func remove() async throws {
+    sweepRemovedCopies()
     guard FileManager.default.fileExists(atPath: layout.root.path) else { return }
     try await exclusively {
       let running = try runningExecutables.runningExecutablePaths()
-      let inUse = installedVersions().filter { isRunning($0, among: running) }
+      let installed = installedVersions()
+      let inUse = installed.filter { isRunning($0, among: running) }
       guard inUse.isEmpty else { throw TartInstallError.inUse(versions: inUse) }
 
-      // One rename takes the whole copy out of use; then the bytes are deleted.
       let trash = layout.root.deletingLastPathComponent()
-        .appendingPathComponent(".\(layout.root.lastPathComponent)-removing-\(UUID().uuidString)")
+        .appendingPathComponent("\(removedCopyPrefix)\(UUID().uuidString)", isDirectory: true)
       try Self.rename(layout.root, to: trash, replacing: false)
-      try? FileManager.default.removeItem(at: trash)
+      do {
+        try FileManager.default.removeItem(at: trash)
+      } catch {
+        let running = try runningExecutables.runningExecutablePaths()
+        let stillInUse = installed.filter {
+          isRunning(inside: trash.appendingPathComponent("versions/\($0)"), among: running)
+        }
+        guard stillInUse.isEmpty else { throw TartInstallError.inUse(versions: stillInUse) }
+      }
+    }
+  }
+
+  /// The start of the name `remove()` gives the managed copy while deleting it.
+  private var removedCopyPrefix: String { ".\(layout.root.lastPathComponent)-removing-" }
+
+  /// Deletes copies an earlier `remove()` set aside but couldn't delete completely, except those a
+  /// running process executes from. Best effort: it never fails the operation that runs it.
+  private func sweepRemovedCopies() {
+    let parent = layout.root.deletingLastPathComponent()
+    let names = (try? FileManager.default.contentsOfDirectory(atPath: parent.path)) ?? []
+    let leftovers = names.filter { $0.hasPrefix(removedCopyPrefix) }
+    guard !leftovers.isEmpty, let running = try? runningExecutables.runningExecutablePaths() else { return }
+    for name in leftovers {
+      let leftover = parent.appendingPathComponent(name, isDirectory: true)
+      guard !isRunning(inside: leftover, among: running) else { continue }
+      // `removeItem` deletes a link itself, and a folder's contents without following links.
+      try? FileManager.default.removeItem(at: leftover)
     }
   }
 
   // MARK: - Layout
 
-  /// Installed versions, oldest first: real folders in `versions/` that hold a `tart.app`.
+  /// Installed versions, oldest first: real folders in `versions/` that hold a `tart.app`. Nothing is
+  /// installed when `versions` itself is a link, so no operation acts through it.
   private func installedVersions() -> [String] {
+    guard (try? Self.fileType(layout.versionsDirectory)) == .typeDirectory else { return [] }
     let names = (try? FileManager.default.contentsOfDirectory(atPath: layout.versionsDirectory.path)) ?? []
     return names.filter(isInstalled).sorted { lhs, rhs in
       switch (TartVersion(lhs), TartVersion(rhs)) {
@@ -398,16 +438,23 @@ public struct ManagedTartInstaller: Sendable {
   }
 
   private func isInstalled(_ version: String) -> Bool {
-    guard !version.hasPrefix(".") else { return false }
+    guard !version.hasPrefix("."), (try? Self.fileType(layout.versionsDirectory)) == .typeDirectory else {
+      return false
+    }
     let directory = layout.versionDirectory(version)
     return (try? Self.fileType(directory)) == .typeDirectory
       && (try? Self.fileType(directory.appendingPathComponent("tart.app"))) == .typeDirectory
   }
 
-  /// Whether one of `running` is inside `versions/<version>/`, as spelled in the layout or with every
-  /// symbolic link resolved (the kernel reports `/private/var/…` for `/var/…`).
+  /// Whether one of `running` is inside `versions/<version>/`.
   private func isRunning(_ version: String, among running: [String]) -> Bool {
-    let directory = layout.versionDirectory(version).path
+    isRunning(inside: layout.versionDirectory(version), among: running)
+  }
+
+  /// Whether one of `running` is inside `folder`, as spelled here or with every symbolic link
+  /// resolved (the kernel reports `/private/var/…` for `/var/…`).
+  private func isRunning(inside folder: URL, among running: [String]) -> Bool {
+    let directory = folder.path
     let resolved = realpath(directory, nil).map { pointer in
       defer { free(pointer) }
       return String(cString: pointer)
@@ -418,16 +465,33 @@ public struct ManagedTartInstaller: Sendable {
 
   /// A new, empty folder in `staging/`, on the same volume as `versions/` so moves are renames.
   private func makeWorkDirectory() throws -> URL {
-    let directory = layout.stagingDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
-    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let directory = try prepareStaging().appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
     return directory
   }
 
-  /// Deletes whatever an interrupted operation left in `staging/`. Safe under the lock: no other
-  /// operation is running.
-  private func cleanStaging() throws {
+  /// Makes `staging/` a real folder and returns it. A link or file in its place is removed itself,
+  /// never what a link points to.
+  private func prepareStaging() throws -> URL {
     let staging = layout.stagingDirectory
-    for item in (try? FileManager.default.contentsOfDirectory(atPath: staging.path)) ?? [] {
+    switch try? Self.fileType(staging) {
+    case .typeDirectory?:
+      return staging
+    case nil:
+      break
+    default:
+      guard unlink(staging.path) == 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+    }
+    try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: false)
+    return staging
+  }
+
+  /// Deletes whatever an interrupted operation left in `staging/`, without following links. Safe
+  /// under the lock: no other operation is running.
+  private func cleanStaging() throws {
+    let staging = try prepareStaging()
+    for item in try FileManager.default.contentsOfDirectory(atPath: staging.path) {
+      // `removeItem` deletes a link itself, and a folder's contents without following links.
       try FileManager.default.removeItem(at: staging.appendingPathComponent(item))
     }
   }
@@ -471,7 +535,8 @@ public struct ManagedTartInstaller: Sendable {
     let descriptor: Int32
     do {
       try FileManager.default.createDirectory(at: layout.root, withIntermediateDirectories: true)
-      descriptor = open(layout.lockFile.path, O_RDWR | O_CREAT | O_CLOEXEC, 0o644)
+      // Never through a link: a `.lock` link fails with ELOOP instead of creating its target.
+      descriptor = open(layout.lockFile.path, O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0o644)
       guard descriptor >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
     } catch {
       throw TartInstallError.fileSystem(error)
