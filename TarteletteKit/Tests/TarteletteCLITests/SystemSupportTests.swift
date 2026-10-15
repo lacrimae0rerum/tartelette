@@ -142,4 +142,46 @@ struct SystemSupportTests {
     #expect(body.contains("exec /opt/homebrew/bin/tart exec -it dev zsh -l"))
     #expect(body.contains("'dev — Shell'"))
   }
+
+  /// Runs `script` as Terminal would, without Terminal, and returns what its command printed.
+  private func runTerminalScript(_ script: URL, home: URL) throws -> String {
+    let shell = Process()
+    shell.executableURL = URL(fileURLWithPath: "/bin/zsh")
+    shell.arguments = [script.path]
+    // No TERM: `clear` complains on stderr and the script goes on.
+    shell.environment = ["PATH": "/usr/bin:/bin", "HOME": home.path]
+    let output = Pipe()
+    shell.standardOutput = output
+    shell.standardError = FileHandle.nullDevice
+    try shell.run()
+    let data = output.fileHandleForReading.readDataToEndOfFile()
+    shell.waitUntilExit()
+    #expect(shell.terminationStatus == 0)
+    // The title escape sequence ends with BEL; the command's output follows it.
+    let text = String(decoding: data, as: UTF8.self)
+    let afterTitle = text.split(separator: "\u{07}", omittingEmptySubsequences: false).last ?? ""
+    return afterTitle.trimmingCharacters(in: .newlines)
+  }
+
+  @Test func terminalScriptPutsTheTartDirectoryFirstOnPath() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent("tartelette-term-\(UUID())")
+    defer { try? FileManager.default.removeItem(at: directory) }
+    // A managed Tart lives under "Application Support": spaces (and any quote) must survive.
+    let tartDirectory = URL(fileURLWithPath: "/Volumes/Tart's Disk/Application Support/tart.app/Contents/MacOS")
+    let script = try TerminalLauncher.makeScript(
+      commandLine: "/usr/bin/printenv PATH", title: "PATH", directory: directory, tartDirectory: tartDirectory)
+
+    #expect(
+      try runTerminalScript(script, home: directory)
+        == "/Volumes/Tart's Disk/Application Support/tart.app/Contents/MacOS:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+    )
+  }
+
+  @Test func terminalScriptWithoutATartDirectoryKeepsTheUsualPath() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent("tartelette-term-\(UUID())")
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let script = try TerminalLauncher.makeScript(commandLine: "/usr/bin/printenv PATH", title: "PATH", directory: directory)
+
+    #expect(try runTerminalScript(script, home: directory) == "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin")
+  }
 }

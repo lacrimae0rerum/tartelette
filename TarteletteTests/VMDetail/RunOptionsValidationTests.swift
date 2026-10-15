@@ -109,6 +109,12 @@ struct RunOptionsValidationTests {
     #expect(unprivileged.contains { $0.severity == .warning })
   }
 
+  @Test func missingSoftnetPointsAtTheTapTartComesFrom() {
+    let found = issues({ $0.network = .softnet(RunOptions.SoftnetOptions()) }, softnet: .missing)
+
+    #expect(errors(found).map(\.message) == ["Softnet isn't installed. Install it with “brew install openai/tools/softnet”."])
+  }
+
   @Test func screenSharingExplainsRemoteLogin() {
     #expect(issues { $0.display = .vnc }.contains { $0.severity == .info })
   }

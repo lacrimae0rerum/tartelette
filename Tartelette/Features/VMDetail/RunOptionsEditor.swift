@@ -108,7 +108,7 @@ enum RunOptionsValidation {
       if interfaces.isEmpty { error("Choose at least one network interface to bridge.") }
     case .softnet:
       switch softnet {
-      case .missing: error("Softnet isn't installed. Install it with “brew install cirruslabs/cli/softnet”.")
+      case .missing: error("Softnet isn't installed. Install it with “\(Links.softnetInstallCommand)”.")
       case .unprivileged: warning("Softnet needs administrator setup before it can run from Tartelette.")
       case .ready, .unknown: break
       }
@@ -180,7 +180,7 @@ final class SoftnetStatus {
     guard let environment = context.environment, let url = SoftnetSupport.locate(environment: environment) else {
       navigation.show(
         title: "Softnet Isn't Installed",
-        message: "Tartelette couldn't find the softnet executable. Install it with “brew install cirruslabs/cli/softnet”, then try again.")
+        message: "Tartelette couldn't find the softnet executable. Install it with “\(Links.softnetInstallCommand)”, then try again.")
       refresh(context)
       return
     }
@@ -475,7 +475,7 @@ private struct NetworkOptionsSection: View {
 
     switch softnet.state {
     case .missing:
-      InlineNotice(.error, "Softnet isn't installed. Install it with “brew install cirruslabs/cli/softnet”.")
+      InlineNotice(.error, "Softnet isn't installed. Install it with “\(Links.softnetInstallCommand)”.")
     case .unprivileged:
       InlineNotice(
         .warning, "Softnet must run as root. Tart only sets this up in a terminal, so Tartelette can do it for you.",
